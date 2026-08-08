@@ -1,0 +1,2142 @@
+<!DOCTYPE html>
+<!--
+  Dashboard Solar + EV — parte de Corrente Labs (https://correntelabs.github.io)
+  Código licenciado sob PolyForm Noncommercial 1.0.0 — ver LICENSE-CODE
+  Documentação (este histórico de alterações) licenciada sob CC BY-NC-SA 4.0 — ver LICENSE
+  Required Notice: Copyright Telmo Leitão (https://correntelabs.github.io)
+-->
+<!--
+  Dashboard Solar + EV — histórico de correções validadas.
+
+  2026-07-09 — v1.0 (baseline de referência para regressão)
+  - Ver dashboard-solar-ev_baseline-validado_2026-07-09.html para o registo completo desta versão.
+
+  2026-08-01 — v2.0 (fases dinâmicas — alteração estrutural)
+  - Removidas as fronteiras de fase fixas por data (phaseOfMonth() com jun/2025, ago/2025
+    hardcoded). As fases passam a ser inteiramente derivadas dos dados carregados: cada mês
+    é classificado pela presença real de dados de bateria (bat_carga/bat_descarga != null)
+    e/ou de sessões wallbox nesse mês; sequências consecutivas com a mesma composição formam
+    uma fase (buildSegments()). Suporta qualquer ordem de instalação (bateria antes do EV,
+    EV antes da bateria, ou simultâneos) e qualquer subconjunto (só PV; PV+bateria sem EV;
+    PV+EV sem bateria; PV+bateria+EV) — decidido propositadamente contra parametrizar datas
+    de instalação como campos editáveis, para não haver duas fontes de verdade divergentes.
+  - Título do dashboard, <title> da página e resumo no cabeçalho tornados dinâmicos consoante
+    exista ou não dados de bateria e/ou de wallbox carregados (systemFlags()/updateHeaderSummary()).
+  - Tabela "Fases de operação" e gráfico G5 (comparação entre fases) ocultam-se por completo
+    quando existe apenas 1 fase nos dados carregados (nada para comparar).
+  - G8 (sazonalidade EV) deixou de ter "(Fase 3)" fixo no título; mostra agora o período real
+    da fase mais recente em que há dados de EV.
+  - KPIs económicos: linhas de "Poupança gestão EV" e "Payback combinado" deixam de aparecer
+    por completo (não apenas com traço "—") quando não há sessões wallbox carregadas.
+  - Removida phaseBackgroundPlugin() — código morto (nunca era invocada) que dependia das
+    fronteiras fixas antigas.
+  - Não testado: sistemas sem bateria nem EV (só PV) do início ao fim dos dados; EV instalado
+    antes da bateria; bateria/EV presentes desde o primeiro mês carregado (sem fase "Só PV"
+    visível); mais de 3 fases na mesma série de dados.
+  2026-08-02 — v2.0.1 (correção de crash reportada por Telmo)
+  - Corrigido: renderG7G8() (gráfico G8, sazonalidade) lia wbMonth[mês].kwh_total sem
+    verificar se esse mês tinha mesmo entrada em wbMonth. Como a presença de EV é agora
+    monótona a partir do primeiro mês com sessões (ver v2.0 acima), um segmento "com EV"
+    pode incluir meses sem nenhuma sessão nesse mês específico — ex.: o mês mais recente,
+    ainda parcial, antes da wallbox ter dados dele; ou um mês em que o utilizador não
+    carregou em casa. Isso lançava "Cannot read properties of undefined (reading
+    'kwh_total')", apanhado pelo try/catch dos dropzones do FusionSolar e da wallbox
+    (por isso aparecia ao carregar qualquer um dos dois — o erro não era do parser,
+    era de um render a jusante que corria a seguir a qualquer upload). Corrigido para
+    tratar esses meses como um vazio no gráfico (sem sessões nesse mês = sem ponto na
+    linha), em vez de assumir que a entrada existe sempre.
+  - Reproduzido antes e depois da correção com um harness Node contra os dados reais
+    (CSV + wallbox deste projeto) e um mês parcial sintético a seguir ao último mês da
+    wallbox — falhava antes, sem exceções depois.
+  - As duas linhas de "Payback só PV" / "Payback combinado" nunca saíram do código (estão
+    na branch res.wbSessions>0 de renderEcoTable(), que corre antes do G8 no pipeline de
+    fullRender() e portanto já tinha escrito a tabela antes do crash); não foi encontrada
+    nenhuma outra via de código que as removesse. Pede-se confirmação de que reaparecem
+    depois desta correção.
+  2026-08-02 — v2.1 (datas de payback — funcionalidade nova, não uma regressão)
+  - Verificado byte a byte contra /mnt/project/dashboard-solar-ev.html e o baseline
+    2026-07-09: nenhum dos dois tinha alguma vez KPIs de "data prevista de payback" nem
+    um marcador no G4 — só existiam "Payback só PV (anos)" / "Payback combinado (anos)"
+    (valores em anos) e um comentário morto a mencionar "annotation manual não incluído".
+    Isto contradiz o histórico de memória de sessões anteriores, que descrevia essa
+    funcionalidade como já validada — aparentemente não chegou a ser gravada neste
+    artefacto, ou perdeu-se nalgum momento. Construída de novo nesta versão.
+  - Adicionados 'Data prevista de payback (só PV)' e 'Data prevista de payback
+    (combinado)' à tabela de KPIs económicos (mesma regra de visibilidade que os
+    "anos": a versão combinada só aparece com wallbox carregada).
+  - A data não é "anos a partir de hoje" — seria enganador ignorar a poupança já
+    acumulada. Percorre primeiro o histórico real mês a mês (precisão exata); só entra
+    em projeção (com a mesma degradação de 0,5%/ano já usada na projeção de 25 anos) a
+    partir do último mês real, se o investimento ainda não tiver sido atingido nos
+    dados carregados.
+  - G4 ganhou um plugin (paybackMarkerPlugin) que desenha uma linha vertical tracejada
+    + rótulo no ponto exato de cada payback previsto. A zona de projeção do gráfico só
+    tem resolução anual ("Ano 1".."Ano 25"), por isso uma data projetada é encostada ao
+    marco anual mais próximo — não faz sentido fingir precisão mensal onde o eixo não a
+    tem; uma data dentro do histórico real usa o mês exato.
+  2026-08-02 — v2.2 (G8 sem depender de EV; corrige linha partida)
+  - Corrigido: G8 mostrava a linha visualmente "partida" num mês sem sessões wallbox
+    (ex.: dez/2025) — o ponto ficava null (correto, sem dados falsos), mas o Chart.js
+    por definição interrompe a linha em vez de saltar o vazio. Adicionado
+    spanGaps:true aos datasets do G8, tal como o resto do gráfico já fazia
+    implicitamente ao ignorar meses sem dados.
+  - G8 deixou de depender de haver EV. Com wallbox carregada, mantém o comportamento
+    anterior (sazonalidade da origem da energia de carregamento, restrita à fase mais
+    recente com EV). Sem wallbox, mostra a sazonalidade geral da casa (% autoconsumo
+    PV vs % rede sobre o consumo total, todo o histórico) — informação que existe em
+    qualquer sistema solar, com ou sem EV.
+  - G7 (doughnut de origem EV) mantém-se exclusivo de sistemas com wallbox carregada —
+    não há generalização sensata para um doughnut cujo único conteúdo é EV.
+  - O card único "card-g7g8" (grid-2, visibilidade partilhada) foi separado em dois
+    cards independentes ("card-g7", "card-g8"), já que agora podem ter visibilidade
+    diferente um do outro.
+  2026-08-02 — v2.3 (lista de documentos carregados, remoção individual)
+  - state.monthly / state.wallboxSessions deixaram de ser a fonte de verdade direta:
+    passam a ser DERIVADOS de state.loadedDocuments (uma entrada por ficheiro
+    carregado), recalculados de raiz sempre que a lista muda. Uma subtração direta
+    sobre o estado fundido não conseguiria garantir corretamente o resultado de remover
+    um ficheiro cujo mês tivesse sido depois substituído por outro ficheiro.
+  - Nova lista "Documentos carregados" na secção 1, acima do botão de limpar tudo, com
+    um botão "Remover" por linha. Cada remoção reconstrói o estado a partir dos
+    documentos que restam, por ordem de carregamento — dá exatamente o resultado de
+    nunca ter carregado aquele ficheiro, repondo o que outro documento tivesse escrito
+    por cima ou por baixo.
+  - Decisões confirmadas com o Telmo: a wallbox mantém-se a 1 ficheiro de cada vez (um
+    novo substitui o anterior, não acumula); sessões wallbox duplicadas (mesmo
+    instante + mesmo kWh) são detetadas e ignoradas no carregamento, mesmo dentro de um
+    único ficheiro; a lista e os dados não sobrevivem a um F5 (só os parâmetros da
+    instalação persistem, como já acontecia).
+  - Aproveitado para corrigir também o dropzone "Relatório Mensal": preservava a ordem
+    de SELEÇÃO dos ficheiros (não a de conclusão da leitura assíncrona) só no baseline
+    validado, não no ficheiro de trabalho — agora está em ambos.
+  - As linhas de estado das 3 dropzones deixam de ser mensagens "acabei de carregar X"
+    que ficavam desatualizadas após uma remoção; passam a refletir sempre a contagem
+    atual de documentos (syncDropzoneStatuses()).
+  2026-08-02 — v2.4 (rodapé: copyright + changelog visível)
+  - Esclarecimento: o changelog nunca foi visível na página — só existiu como este
+    comentário HTML (visível apenas em "ver código-fonte"). O Telmo lembrava-se dele
+    como já sendo uma funcionalidade visível; não era. Construído de raiz.
+  - Rodapé passa a ter "© Telmo Leitão · telmo.leitao@gmail.com", a pedido do Telmo
+    (dashboard começa a ser partilhado com mais utilizadores), com o mesmo padrão
+    visual do projeto NDC Tools.
+  - Adicionado um dropdown de changelog no rodapé (clicar na versão abre/fecha),
+    alimentado por um array JS estruturado (CHANGELOG) SEPARADO deste comentário
+    técnico — este continua completo e para uso interno entre sessões; o do dropdown
+    é condensado, em linguagem simples, para quem usa o dashboard (confirmado com o
+    Telmo). DASHBOARD_VERSION é a fonte única da versão exibida, para o número no
+    rodapé e o topo do changelog nunca divergirem.
+  - Painel do changelog oculto explicitamente na impressão (@media print), para não
+    aparecer no PDF exportado independentemente do estado em que ficou aberto/fechado.
+
+  2026-08-02 — BASELINE VALIDADO (v2.4)
+  Marcado como referência de regressão a pedido do Telmo, depois de validação cruzada
+  (testes automatizados via Node + testes manuais do Telmo num browser real) sem
+  quebras encontradas de nenhum dos dois lados.
+  - Validado por Telmo (browser real): carregar e remover documentos da lista;
+    KPIs e gráficos com os 4 ficheiros reais completos (3 anuais + wallbox total);
+    exportação PDF (Chrome); datas previstas de payback + marcador no gráfico G4;
+    dropdown de changelog do rodapé, alternado com as restantes operações acima para
+    garantir estabilidade entre operações (não uma verificação isolada).
+  - Validado por mim (Node, biblioteca SheetJS real, dados reais do Telmo): fusão de
+    3 anuais em 2 línguas diferentes (EN 2024/2025, PT 2026); segmentação dinâmica de
+    fases (deu 2 fases reais, não 3 — bateria e EV começaram no mesmo mês, confirmando
+    que a deteção automática reflete a instalação real); remoção de documento com
+    reconstrução correta do estado; ausência de duplicados na wallbox real; G8 sem
+    crash no mês de gap real (dez/2025) que motivou a correção.
+  - Não testado — não invalida o baseline, mas fica registado para não ser esquecido:
+    · PDF em Firefox/Edge (só Chrome foi confirmado, aqui e no baseline anterior)
+    · CSV em inglês (só XLSX em inglês foi testado; CSV segue o mesmo código de
+      deteção de colunas, mas nunca foi exercitado com um ficheiro CSV real em inglês)
+    · Dois ficheiros do mesmo mês selecionados no mesmo lote do "Relatório Mensal"
+      (a lógica de ordem de seleção foi corrigida e testada isoladamente, mas não
+      neste cenário exato)
+
+  2026-08-03 — v2.5 (sincronização do ficheiro de trabalho + secção de ajuda)
+  - Sincronizado o ficheiro de trabalho (dashboard-solar-ev.html) com o baseline v2.4
+    (2026-08-02). O ficheiro de trabalho tinha ficado preso na estrutura do baseline
+    de 07-09 (fases fixas por data, sem lista de documentos, sem datas de payback,
+    sem changelog no rodapé) — essas funcionalidades nunca chegaram a ser propagadas
+    para fora do ficheiro de baseline, provavelmente por o ficheiro de trabalho ter
+    sido editado a partir de uma cópia antiga em vez do baseline mais recente. A
+    partir desta versão, dashboard-solar-ev.html parte do v2.4 e volta a ser a fonte
+    de verdade única — não há duas linhas de desenvolvimento divergentes.
+  - Adicionado: botão "❓ Ajuda" no cabeçalho, que abre um modal com o guia de
+    utilização completo (conteúdo estático em HTML, sem dependência de rede nem de
+    ficheiro externo). Cobre as três zonas de upload, a lista de documentos, os
+    parâmetros, os KPIs (principais/económicos/bateria), as fases automáticas e
+    todos os gráficos G1-G9, incluindo quando cada um aparece/desaparece.
+  - Modal fechável por botão ×, clique fora da caixa, ou tecla Esc. Oculto
+    explicitamente na impressão (@media print), tal como já acontecia com o painel
+    de changelog do rodapé.
+  - Validado por Telmo: leitura do modal em ecrã mobile — scroll interno da caixa
+    funciona corretamente em viewport reduzido.
+  - Validado por Telmo (Chrome, Windows; testado com e sem dados carregados):
+    dropdown de changelog do rodapé aberto ao mesmo tempo que o modal de ajuda —
+    abrir o modal por cima do dropdown já aberto funciona corretamente; ao fechar
+    o modal, o dropdown de changelog mantém-se aberto, sem quebra gráfica nem
+    funcional em nenhum dos dois.
+
+  2026-08-03 — BASELINE VALIDADO (v2.5)
+  Marcado como referência de regressão a pedido do Telmo: os dois cenários que
+  tinham ficado por testar na v2.5 (scroll do modal em mobile; modal de ajuda
+  em simultâneo com o dropdown de changelog aberto) foram ambos validados por
+  ele sem quebras. Ver dashboard-solar-ev_baseline-validado_2026-08-03.html.
+-->
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Solar — Instalação Residencial</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg-page:#0F172A;
+    --bg-card:#1E293B;
+    --bg-chart:#1E293B;
+    --border:#334155;
+    --text-main:#F1F5F9;
+    --text-sub:#94A3B8;
+    --grid:#334155;
+    --accent:#2A9D8F;
+    --accent2:#F4A261;
+    --f1:#94A3B8;
+    --f2:#6366F1;
+    --f3:#10B981;
+    --f4:#F4A261;
+    --danger:#EF4444;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg-page);
+    color:var(--text-main);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.4;
+  }
+  header{
+    padding:28px 32px 18px;
+    border-bottom:1px solid var(--border);
+  }
+  header h1{margin:0 0 4px;font-size:22px;font-weight:700;letter-spacing:.2px;}
+  header p{margin:0;color:var(--text-sub);font-size:13px;}
+  .wrap{max-width:1320px;margin:0 auto;padding:0 24px 60px;}
+  section{margin-top:28px;}
+  h2.section-title{
+    font-size:14px;text-transform:uppercase;letter-spacing:1px;
+    color:var(--text-sub);margin:0 0 12px;font-weight:600;
+  }
+  /* Upload zone */
+  .upload-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}
+  .dropzone{
+    background:var(--bg-card);border:1.5px dashed var(--border);border-radius:var(--radius);
+    padding:18px;text-align:center;cursor:pointer;transition:.15s border-color,.15s background;
+    position:relative;
+  }
+  .dropzone.dragover{border-color:var(--accent);background:#20304a;}
+  .dropzone h3{margin:0 0 6px;font-size:13px;color:var(--text-main);}
+  .dropzone p{margin:0;font-size:11.5px;color:var(--text-sub);}
+  .dropzone input{display:none;}
+  .status-line{margin-top:8px;font-size:11.5px;color:var(--accent);min-height:14px;}
+  .status-line.err{color:var(--danger);}
+  /* KPI cards */
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;}
+  .kpi-card{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:16px 18px;
+  }
+  .kpi-card .label{font-size:11.5px;color:var(--text-sub);text-transform:uppercase;letter-spacing:.5px;}
+  .kpi-card .value{font-size:26px;font-weight:700;margin-top:6px;}
+  .kpi-card .sub{font-size:11.5px;color:var(--text-sub);margin-top:2px;}
+  .kpi-card .value.teal{color:var(--accent);}
+  .kpi-card .value.orange{color:var(--accent2);}
+  /* Tables */
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  table th,table td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);}
+  table th{color:var(--text-sub);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;}
+  table tbody tr:hover{background:#233046;}
+  .table-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:6px 18px 12px;overflow-x:auto;}
+  /* Charts */
+  .chart-card{background:var(--bg-chart);border:1px solid var(--border);border-radius:var(--radius);padding:18px;}
+  .chart-card h3{margin:0 0 12px;font-size:13.5px;font-weight:600;color:var(--text-main);}
+  .chart-wrap{position:relative;height:320px;}
+  .chart-wrap.short{height:220px;}
+  .print-chart-img{display:none;}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+  @media (max-width:900px){.grid-2,.grid-3{grid-template-columns:1fr;}}
+  .chart-stack{display:flex;flex-direction:column;gap:16px;margin-top:16px;}
+  /* Params panel */
+  .params-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;}
+  .param{display:flex;flex-direction:column;gap:4px;}
+  .param label{font-size:11px;color:var(--text-sub);}
+  .param input{
+    background:#0F172A;border:1px solid var(--border);border-radius:6px;color:var(--text-main);
+    padding:8px 10px;font-size:13px;
+  }
+  .param input:focus{outline:none;border-color:var(--accent);}
+  .btn{
+    background:var(--accent);color:#04231f;border:none;border-radius:8px;padding:10px 18px;
+    font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.2px;
+  }
+  .btn:hover{opacity:.9;}
+  .btn.secondary{background:transparent;color:var(--text-main);border:1px solid var(--border);}
+  .actions{display:flex;gap:10px;margin-top:16px;}
+  .empty-note{color:var(--text-sub);font-size:13px;padding:24px;text-align:center;border:1px dashed var(--border);border-radius:var(--radius);}
+  /* Documentos carregados */
+  .doc-list{margin-top:14px;}
+  .doc-list-title{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-sub);margin:0 0 8px;font-weight:600;}
+  .doc-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+    padding:8px 12px;margin-bottom:6px;font-size:12.5px;
+  }
+  .doc-row .doc-info{display:flex;flex-direction:column;gap:2px;overflow:hidden;min-width:0;}
+  .doc-row .doc-name{color:var(--text-main);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .doc-row .doc-summary{color:var(--text-sub);font-size:11px;display:flex;align-items:center;gap:6px;}
+  .doc-row .doc-type-badge{font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(148,163,184,.18);color:var(--text-sub);white-space:nowrap;flex-shrink:0;}
+  .doc-row .btn-remove-doc{
+    background:transparent;border:1px solid var(--border);color:var(--danger);
+    border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap;flex-shrink:0;
+  }
+  .doc-row .btn-remove-doc:hover{background:rgba(239,68,68,.12);}
+  .phase-badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;}
+  .phase-badge.f1{background:rgba(148,163,184,.18);color:var(--f1);}
+  .phase-badge.f2{background:rgba(99,102,241,.18);color:var(--f2);}
+  .phase-badge.f3{background:rgba(16,185,129,.18);color:var(--f3);}
+  .phase-badge.f4{background:rgba(244,162,97,.18);color:var(--f4);}
+  footer{color:var(--text-sub);font-size:11.5px;text-align:center;padding:30px 0 10px;}
+  footer p{margin:4px 0;}
+  .version-toggle{
+    color:var(--text-sub);cursor:pointer;user-select:none;border-bottom:1px dotted var(--border);
+  }
+  .version-toggle:hover{color:var(--text-main);}
+  footer a{color:var(--text-sub);text-decoration:none;border-bottom:1px dotted var(--border);}
+  footer a:hover{color:var(--text-main);}
+  .changelog-panel{
+    max-width:420px;margin:10px auto 0;text-align:left;
+    background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:14px 16px;font-size:11.5px;
+  }
+  .changelog-entry{margin-bottom:10px;}
+  .changelog-entry:last-child{margin-bottom:0;}
+  .changelog-entry .cl-version{color:var(--text-main);font-weight:700;}
+  .changelog-entry .cl-date{color:var(--text-sub);font-weight:400;font-size:10.5px;}
+  .changelog-entry ul{margin:4px 0 0;padding-left:16px;}
+  .changelog-entry li{margin-bottom:2px;color:var(--text-sub);}
+  /* Modal de ajuda */
+  .help-modal-overlay{
+    display:none; position:fixed; inset:0; background:rgba(15,23,42,.72);
+    z-index:1000; align-items:flex-start; justify-content:center; padding:40px 16px;
+    overflow-y:auto;
+  }
+  .help-modal-overlay.open{display:flex;}
+  .help-modal{
+    background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius);
+    max-width:760px; width:100%; max-height:calc(100vh - 80px); overflow-y:auto;
+    box-shadow:0 20px 60px rgba(0,0,0,.5);
+  }
+  .help-modal-header{
+    position:sticky; top:0; background:var(--bg-card); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between; padding:18px 24px; z-index:1;
+  }
+  .help-modal-header h2{margin:0; font-size:16px;}
+  .help-modal-close{
+    background:transparent; border:1px solid var(--border); color:var(--text-main);
+    border-radius:6px; width:30px; height:30px; font-size:18px; line-height:1; cursor:pointer;
+  }
+  .help-modal-close:hover{background:rgba(148,163,184,.12);}
+  .help-modal-body{padding:8px 24px 24px; font-size:13px; color:var(--text-main); line-height:1.55;}
+  .help-modal-body h3{font-size:14.5px; margin:22px 0 8px; color:var(--text-main); border-bottom:1px solid var(--border); padding-bottom:6px;}
+  .help-modal-body h3:first-child{margin-top:12px;}
+  .help-modal-body h4{font-size:13px; margin:14px 0 4px; color:var(--accent2);}
+  .help-modal-body p{color:var(--text-sub); margin:6px 0;}
+  .help-modal-body ul{color:var(--text-sub); margin:6px 0; padding-left:20px;}
+  .help-modal-body li{margin-bottom:3px;}
+  .help-modal-body table{margin:8px 0 4px; font-size:12px;}
+  .help-modal-body table th, .help-modal-body table td{padding:6px 10px;}
+  .help-modal-body strong{color:var(--text-main);}
+  .help-modal-body em.note{color:var(--text-sub); font-size:11.5px; font-style:italic;}
+  @media print{
+    .changelog-panel, .version-toggle, #btn-help, .help-modal-overlay{display:none !important;}
+  }
+  @media print{
+    .dropzone,.actions,.upload-grid{display:none !important;}
+    body{background:#fff;color:#111;}
+    /* Canvas não é fiável na impressão (corta em largura fixa, e o Firefox pode nem
+       repintar o bitmap). Trocamos por uma imagem estática gerada antes de imprimir,
+       que escala com a largura da página em vez de cortar. */
+    canvas{display:none !important;}
+    .print-chart-img{display:block !important; width:100% !important; height:auto !important;}
+    .chart-wrap, .chart-wrap.short{height:auto !important;}
+    .chart-card, .kpi-card, .table-card{break-inside:avoid; page-break-inside:avoid;}
+    section{break-inside:auto;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap" style="padding:0; display:flex; align-items:flex-start; justify-content:space-between; gap:16px;">
+    <div>
+      <h1 id="header-title">☀️ Dashboard Solar</h1>
+      <p id="header-sub">2.58 kWp · Huawei SUN2000-2KTL-L1 · Huawei Luna2000 10kWh</p>
+    </div>
+    <button class="btn secondary" id="btn-help" style="flex-shrink:0;">❓ Ajuda</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section id="upload-section">
+    <h2 class="section-title">1 · Carregar dados</h2>
+    <div class="upload-grid">
+      <div class="dropzone" id="dz-fusion">
+        <h3>FusionSolar — Relatório Anual</h3>
+        <p>Granularidade mensal · uma linha por mês · CSV (PT) ou XLSX (EN)</p>
+        <input type="file" id="file-fusion" accept=".csv,.xlsx">
+        <div class="status-line" id="status-fusion">Nenhum ficheiro carregado</div>
+      </div>
+      <div class="dropzone" id="dz-daily">
+        <h3>FusionSolar — Relatório Mensal</h3>
+        <p>Granularidade diária · substitui o mês correspondente · CSV ou XLSX</p>
+        <input type="file" id="file-daily" accept=".csv,.xlsx" multiple>
+        <div class="status-line" id="status-daily">Nenhum ficheiro carregado</div>
+      </div>
+      <div class="dropzone" id="dz-wallbox">
+        <h3>Wallbox — XLSX sessões de carga</h3>
+        <p>Sem cabeçalho — colunas por posição</p>
+        <input type="file" id="file-wallbox" accept=".xlsx">
+        <div class="status-line" id="status-wallbox">Nenhum ficheiro carregado</div>
+      </div>
+    </div>
+    <div class="doc-list" id="doc-list-container" style="display:none;">
+      <h3 class="doc-list-title">Documentos carregados</h3>
+      <div id="doc-list-body"></div>
+    </div>
+    <div class="actions">
+      <button class="btn secondary" id="btn-clear-data">Limpar todos os dados carregados</button>
+    </div>
+  </section>
+
+  <section id="params-section">
+    <h2 class="section-title">2 · Parâmetros da instalação (editáveis)</h2>
+    <div class="table-card" style="padding:16px 18px;">
+      <div class="params-grid" id="params-grid"></div>
+      <div class="actions">
+        <button class="btn" id="btn-recalc">Recalcular</button>
+        <button class="btn secondary" id="btn-save-params">Guardar parâmetros (.json)</button>
+        <button class="btn secondary" id="btn-load-params">Carregar parâmetros (.json)</button>
+        <input type="file" id="file-params" accept=".json" style="display:none;">
+        <button class="btn secondary" id="btn-print">Exportar PDF</button>
+      </div>
+      <div class="status-line" id="params-saved-status" style="margin-top:10px;"></div>
+    </div>
+  </section>
+
+  <section id="kpi-section">
+    <h2 class="section-title">3 · KPIs principais</h2>
+    <div id="kpi-main-target"><div class="empty-note">Carregue o CSV do FusionSolar para calcular os KPIs.</div></div>
+  </section>
+
+  <section id="kpi-eco-section" style="display:none;">
+    <h2 class="section-title">4 · KPIs económicos</h2>
+    <div class="table-card"><table id="table-eco"><tbody></tbody></table></div>
+  </section>
+
+  <section id="kpi-bat-section" style="display:none;">
+    <h2 class="section-title">5 · KPIs bateria</h2>
+    <div class="table-card"><table id="table-bat"><tbody></tbody></table></div>
+  </section>
+
+  <section id="phase-section" style="display:none;">
+    <h2 class="section-title">6 · Fases de operação</h2>
+    <div class="table-card">
+      <table id="table-phase">
+        <thead><tr><th>Fase</th><th>Período</th><th>Meses</th><th>Consumo/mês</th><th>Autossuf.</th><th>Import./mês</th><th>Wallbox/mês</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="charts-section" style="display:none;">
+    <h2 class="section-title">7 · Gráficos</h2>
+    <div class="chart-stack">
+      <div class="chart-card">
+        <h3>G1 · Produção, consumo e importação mensal</h3>
+        <div class="chart-wrap"><canvas id="chart-g1"></canvas></div>
+      </div>
+      <div class="grid-2">
+        <div class="chart-card">
+          <h3>G2a · Autossuficiência mensal (%)</h3>
+          <div class="chart-wrap short"><canvas id="chart-g2a"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <h3>G2b · Taxa de autoconsumo mensal (%)</h3>
+          <div class="chart-wrap short"><canvas id="chart-g2b"></canvas></div>
+        </div>
+      </div>
+      <div class="chart-card" id="card-g3" style="display:none;">
+        <h3>G3 · Carga / descarga da bateria</h3>
+        <div class="chart-wrap"><canvas id="chart-g3"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>G4 · Poupança acumulada, projeção e payback</h3>
+        <div class="chart-wrap"><canvas id="chart-g4"></canvas></div>
+      </div>
+      <div class="chart-card" id="card-g5">
+        <h3>G5 · Comparação entre fases</h3>
+        <div class="grid-3">
+          <div class="chart-wrap short"><canvas id="chart-g5a"></canvas></div>
+          <div class="chart-wrap short"><canvas id="chart-g5b"></canvas></div>
+          <div class="chart-wrap short"><canvas id="chart-g5c"></canvas></div>
+        </div>
+      </div>
+      <div class="chart-card" id="card-g6" style="display:none;">
+        <h3>G6 · Origem da energia de carregamento EV (mensal)</h3>
+        <div class="chart-wrap"><canvas id="chart-g6"></canvas></div>
+      </div>
+      <div class="chart-card" id="card-g7" style="display:none;">
+        <h3>G7 · Origem total da energia EV</h3>
+        <div class="chart-wrap short"><canvas id="chart-g7"></canvas></div>
+      </div>
+      <div class="chart-card" id="card-g8" style="display:none;">
+        <h3 id="g8-title">G8 · Sazonalidade — % Solar vs % Rede</h3>
+        <div class="chart-wrap short"><canvas id="chart-g8"></canvas></div>
+      </div>
+      <div class="chart-card" id="card-g9" style="display:none;">
+        <h3>G9 · Custo de carregamento EV — cenários</h3>
+        <div class="chart-wrap short"><canvas id="chart-g9"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Dashboard gerado localmente — nenhum dado sai do browser.</p>
+    <p>© Telmo Leitão · <a href="mailto:telmo.leitao@gmail.com">telmo.leitao@gmail.com</a> · <span class="version-toggle" id="version-toggle">v2.5 ▾</span></p>
+    <p><a href="https://correntelabs.github.io">Corrente Labs</a> · Código sob PolyForm Noncommercial 1.0.0 · Documentação sob CC BY-NC-SA 4.0</p>
+    <div class="changelog-panel" id="changelog-panel" style="display:none;"></div>
+  </footer>
+</div>
+
+<div class="help-modal-overlay" id="help-modal-overlay">
+  <div class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-modal-title">
+    <div class="help-modal-header">
+      <h2 id="help-modal-title">📖 Guia de Utilização</h2>
+      <button class="help-modal-close" id="btn-help-close" aria-label="Fechar">×</button>
+    </div>
+    <div class="help-modal-body">
+      <p class="note" style="color:var(--text-sub); font-size:11.5px; margin-top:0;">Guia da versão v2.5. Descreve as funcionalidades atuais do dashboard.</p>
+
+      <h3>O que é este dashboard</h3>
+      <p>Ferramenta local de análise da tua instalação solar (e, se aplicável, bateria e carregamento de veículos elétricos). Lê ficheiros exportados do FusionSolar e da Wallbox e calcula KPIs, tabelas e gráficos diretamente no teu browser.</p>
+      <p><strong>Privacidade:</strong> nenhum dado sai do teu computador. Não há servidor — tudo é processado localmente, no browser.</p>
+
+      <h3>1 · Carregar dados</h3>
+      <p>Há três zonas de upload.</p>
+
+      <h4>FusionSolar — Relatório Anual</h4>
+      <ul>
+        <li>Granularidade <strong>mensal</strong> — uma linha do ficheiro corresponde a um mês completo.</li>
+        <li>Aceita CSV (exportação em português) ou XLSX (exportação em inglês) — o dashboard deteta automaticamente o idioma e o formato.</li>
+        <li>Cada mês carregado deste ficheiro <strong>substitui</strong> qualquer dado anterior desse mesmo mês.</li>
+      </ul>
+
+      <h4>FusionSolar — Relatório Mensal</h4>
+      <ul>
+        <li>Granularidade <strong>diária</strong> — o dashboard soma automaticamente todas as linhas do ficheiro num único valor mensal.</li>
+        <li>Podes carregar <strong>vários ficheiros de uma vez</strong> (um por mês, por exemplo).</li>
+        <li>Se dois ficheiros do lote cobrirem o mesmo mês, prevalece o que foi <strong>selecionado por último</strong>, não o que terminou de carregar primeiro.</li>
+        <li>Também substitui o mês correspondente no conjunto de dados.</li>
+      </ul>
+
+      <h4>Wallbox — sessões de carga</h4>
+      <ul>
+        <li>Ficheiro XLSX sem cabeçalho (colunas identificadas por posição).</li>
+        <li>Só existe <strong>um "lugar"</strong> para a wallbox: carregar um novo ficheiro substitui sempre o anterior por completo (não se soma).</li>
+        <li>Sessões duplicadas (mesmo instante de início + mesma energia) são detetadas e ignoradas automaticamente, mesmo dentro do mesmo ficheiro.</li>
+      </ul>
+
+      <h4>Documentos carregados</h4>
+      <p>Por baixo das três zonas de upload aparece uma lista com todos os ficheiros já carregados. Cada linha tem um botão <strong>Remover</strong>, que retira só aquele ficheiro e recalcula tudo como se ele nunca tivesse sido carregado.</p>
+
+      <h4>Limpar todos os dados</h4>
+      <p>Botão que apaga todos os ficheiros carregados de uma vez (pede confirmação). <strong>Não afeta</strong> os parâmetros da instalação.</p>
+
+      <h3>2 · Parâmetros da instalação</h3>
+      <table>
+        <thead><tr><th>Parâmetro</th><th>O que é</th></tr></thead>
+        <tbody>
+          <tr><td>kWp instalado</td><td>Potência de pico do sistema fotovoltaico</td></tr>
+          <tr><td>Inversor / Bateria (modelo)</td><td>Texto livre, só para referência</td></tr>
+          <tr><td>Capacidade bateria (kWh)</td><td>Usada no cálculo de ciclos e vida útil</td></tr>
+          <tr><td>EVs (opcional)</td><td>Texto livre — aparece no cabeçalho se preenchido</td></tr>
+          <tr><td>Investimento bruto / Apoios / Líquido (€)</td><td>Base do cálculo de payback e ROI</td></tr>
+          <tr><td>Tarifa vazio / fora vazio (€/kWh)</td><td>Usadas nos cálculos de poupança e custo EV</td></tr>
+          <tr><td>Benchmark regional (kWh/kWp/mês)</td><td>Referência de comparação</td></tr>
+          <tr><td>CO2 factor (kg/kWh)</td><td>Usado no cálculo de CO2 evitado</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Botões:</strong> Recalcular (aplica alterações); Guardar/Carregar parâmetros (.json) (cópia de segurança); Exportar PDF (gera um PDF com KPIs, tabelas e gráficos).</p>
+      <p><em class="note">Os parâmetros ficam guardados neste browser entre sessões. Os ficheiros de dados carregados não — tens de voltar a carregá-los sempre que abrires a página.</em></p>
+
+      <h3>3 · KPIs principais</h3>
+      <p>Produção PV total, Consumo total, Autoconsumo total, Importação total, Autossuficiência global, Taxa de autoconsumo (aproximada), CO2 evitado, e Carregamento EVs (kWh e nº de sessões, só se houver wallbox carregada).</p>
+
+      <h3>4 · KPIs económicos</h3>
+      <ul>
+        <li>Poupança bruta PV (acumulada) e poupança anual projetada.</li>
+        <li><strong>Com wallbox:</strong> poupança de gestão EV (período e anualizada), poupança total combinada, payback só-PV e combinado (anos), e a data prevista de cada payback.</li>
+        <li><strong>Sem wallbox:</strong> apenas um payback (equivalente ao só-PV) e a respetiva data.</li>
+        <li>Poupança projetada a 25 anos, lucro líquido e ROI a 25 anos.</li>
+      </ul>
+      <p><em class="note">A data de payback percorre primeiro o histórico real mês a mês; só entra em projeção (degradação de 0,5%/ano) se o investimento ainda não tiver sido recuperado nos dados carregados.</em></p>
+
+      <h3>5 · KPIs bateria</h3>
+      <p>Só aparece se houver dados de bateria carregados: energia total carregada/descarregada, eficiência round-trip, ciclos estimados e vida útil estimada (calculada apenas sobre os meses com dados de bateria).</p>
+
+      <h3>6 · Fases de operação</h3>
+      <p>O dashboard deteta automaticamente as fases da instalação a partir dos dados — não usa datas fixas. Cada fase corresponde a um período com a mesma composição (só PV / PV+bateria / PV+EV / PV+bateria+EV). Esta tabela só aparece com 2 ou mais fases nos dados carregados.</p>
+
+      <h3>7 · Gráficos</h3>
+      <table>
+        <thead><tr><th>Gráfico</th><th>Conteúdo</th><th>Quando aparece</th></tr></thead>
+        <tbody>
+          <tr><td>G1</td><td>Produção, consumo (residencial + EV) e importação mensal</td><td>Sempre</td></tr>
+          <tr><td>G2a/G2b</td><td>Autossuficiência e taxa de autoconsumo mensal (%), com média</td><td>Sempre</td></tr>
+          <tr><td>G3</td><td>Carga/descarga da bateria por mês</td><td>Só com bateria</td></tr>
+          <tr><td>G4</td><td>Poupança acumulada + projeção 25 anos + marcadores de payback</td><td>Sempre</td></tr>
+          <tr><td>G5</td><td>Comparação entre fases</td><td>Só com 2+ fases</td></tr>
+          <tr><td>G6</td><td>Origem da energia de carregamento EV por mês</td><td>Só com wallbox</td></tr>
+          <tr><td>G7</td><td>Origem total da energia EV (donut)</td><td>Só com wallbox</td></tr>
+          <tr><td>G8</td><td>Sazonalidade — % solar vs. % rede (EV se houver wallbox; casa toda se não)</td><td>Sempre que haja dados</td></tr>
+          <tr><td>G9</td><td>Comparação de custo de carregamento EV — cenários</td><td>Só com wallbox</td></tr>
+        </tbody>
+      </table>
+
+      <h3>8 · Exportar para PDF</h3>
+      <p>O botão <strong>Exportar PDF</strong> gera uma versão para impressão com todos os gráficos convertidos em imagens estáticas. Confirmado a funcionar no Chrome. <em class="note">Ainda não confirmado em Firefox/Edge.</em></p>
+
+      <h3>9 · Notas e limitações conhecidas</h3>
+      <ul>
+        <li>Relatório FusionSolar em CSV inglês ainda não testado com um ficheiro real (só XLSX inglês).</li>
+        <li>Dois ficheiros do mesmo mês no mesmo lote do "Relatório Mensal" não testado nesse cenário exato.</li>
+        <li>Exportação PDF não confirmada em Firefox/Edge.</li>
+      </ul>
+
+      <h3>10 · Histórico de versões</h3>
+      <p>No rodapé da página, clicar no número da versão abre um resumo simplificado de tudo o que mudou em cada versão do dashboard.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   ESTADO GLOBAL
+============================================================ */
+const state = {
+  monthly: {},        // { 'YYYY-MM': {pv_kwh, inversor_kwh, exportacao, importacao, esp_kwh_kwp, consumo, autoconsumo, taxa_autoconsumo, co2_evitado, bat_carga, bat_descarga} }
+  wallboxSessions: [], // [{kwh, start, stop, duration_min}]
+  wallboxLoaded: false,
+  batteryAvailable: false,
+  loadedDocuments: [], // [{id, type:'fusion-annual'|'fusion-daily'|'wallbox', filename, loadedAt, summary, payload}]
+  charts: {}
+};
+
+const params = {
+  kwp: 2.58,
+  inversor_modelo: 'Huawei SUN2000-2KTL-L1',
+  bateria_modelo: 'Huawei Luna2000',
+  bateria_capacidade_kwh: 10,
+  evs_info: '',
+  invest_bruto: 9845.78,
+  apoios: 7698.83,
+  invest_liquido: 2146.95,
+  tarifa_vazio: 0.11253,
+  tarifa_fora_vazio: 0.20852,
+  benchmark: 108,
+  co2_factor: 0.494
+};
+
+const PARAM_DEFS = [
+  {key:'kwp', label:'kWp instalado', type:'number', step:'0.01'},
+  {key:'inversor_modelo', label:'Inversor (modelo)', type:'text'},
+  {key:'bateria_modelo', label:'Bateria (modelo)', type:'text'},
+  {key:'bateria_capacidade_kwh', label:'Capacidade bateria (kWh)', type:'number', step:'0.1'},
+  {key:'evs_info', label:'EVs (modelo/capacidade, opcional)', type:'text'},
+  {key:'invest_bruto', label:'Investimento bruto (€)', type:'number', step:'0.01'},
+  {key:'apoios', label:'Apoios recebidos (€)', type:'number', step:'0.01'},
+  {key:'invest_liquido', label:'Investimento líquido (€)', type:'number', step:'0.01'},
+  {key:'tarifa_vazio', label:'Tarifa vazio (€/kWh)', type:'number', step:'0.00001'},
+  {key:'tarifa_fora_vazio', label:'Tarifa fora vazio (€/kWh)', type:'number', step:'0.00001'},
+  {key:'benchmark', label:'Benchmark regional (kWh/kWp/mês)', type:'number', step:'0.1'},
+  {key:'co2_factor', label:'CO2 factor (kg/kWh)', type:'number', step:'0.001'}
+];
+
+/* ============================================================
+   VERSÃO E CHANGELOG VISÍVEL
+   Separado de propósito do comentário técnico no topo do ficheiro: aquele é para
+   retomar contexto de desenvolvimento entre sessões (detalhe de bugs, código,
+   ficheiros de teste); este é o que aparece no dropdown do rodapé, para quem usa o
+   dashboard — linguagem simples, sem jargão de implementação.
+============================================================ */
+const DASHBOARD_VERSION = 'v2.5';
+const CHANGELOG = [
+  { version:'v2.5', date:'2026-08-03', title:'Guia de utilização integrado', items:[
+    'Novo botão "❓ Ajuda" no cabeçalho, com um guia completo de utilização do dashboard.',
+    'O guia explica cada zona de upload, os parâmetros, os KPIs, as fases automáticas e todos os gráficos.'
+  ]},
+  { version:'v2.4', date:'2026-08-02', title:'Rodapé com autoria e histórico de versões', items:[
+    'Rodapé passa a mostrar autoria e contacto.',
+    'A versão no rodapé abre um histórico simplificado do que mudou em cada versão (este painel).'
+  ]},
+  { version:'v2.3', date:'2026-08-02', title:'Lista de documentos carregados', items:[
+    'Lista dos ficheiros carregados, com um botão para remover um ficheiro específico sem ter de limpar tudo.',
+    'Sessões de carregamento duplicadas na wallbox são detetadas e ignoradas automaticamente.'
+  ]},
+  { version:'v2.2', date:'2026-08-02', title:'Gráfico de sazonalidade sem depender de EV', items:[
+    'O gráfico de sazonalidade (G8) já não precisa de veículo elétrico — mostra a sazonalidade solar da casa em qualquer sistema.',
+    'Corrigida uma linha do gráfico que aparecia partida em meses sem dados de carregamento.'
+  ]},
+  { version:'v2.1', date:'2026-08-02', title:'Datas previstas de payback', items:[
+    'Além do número de anos, os KPIs económicos mostram a data prevista de payback (só PV e combinado).',
+    'O gráfico de poupança acumulada assinala essas datas diretamente na curva.'
+  ]},
+  { version:'v2.0.1', date:'2026-08-02', title:'Correção de erro ao carregar dados', items:[
+    'Corrigido um erro que podia surgir ao carregar dados do FusionSolar ou da wallbox nalgumas combinações de datas.'
+  ]},
+  { version:'v2.0', date:'2026-08-01', title:'Fases automáticas, sistemas flexíveis', items:[
+    'As fases do sistema (só solar / solar+bateria / solar+bateria+VE) passam a ser detetadas automaticamente a partir dos dados carregados, em vez de datas fixas.',
+    'O dashboard passa a adaptar-se a instalações sem bateria, sem veículo elétrico, ou com qualquer ordem de instalação entre os dois.'
+  ]},
+  { version:'v1.0', date:'2026-07-09', title:'Primeira versão validada', items:[
+    'Primeira versão estável do dashboard, com suporte a relatórios FusionSolar (PT/EN) e sessões Wallbox.'
+  ]}
+];
+
+const LS_KEY = 'solarEvDashboard_params_v1';
+
+function loadParamsFromLocalStorage(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(raw){
+      const saved = JSON.parse(raw);
+      Object.assign(params, saved);
+      return true;
+    }
+  }catch(err){
+    console.warn('Não foi possível ler parâmetros do localStorage:', err);
+  }
+  return false;
+}
+
+function saveParamsToLocalStorage(){
+  try{
+    localStorage.setItem(LS_KEY, JSON.stringify(params));
+    setParamsSavedStatus('Parâmetros gravados neste browser.');
+  }catch(err){
+    console.warn('Não foi possível gravar parâmetros no localStorage:', err);
+    setParamsSavedStatus('Não foi possível gravar automaticamente (modo privado ou armazenamento bloqueado). Usa "Guardar parâmetros (.json)".', true);
+  }
+}
+
+function setParamsSavedStatus(msg, isErr){
+  const el = document.getElementById('params-saved-status');
+  if(!el) return;
+  el.textContent = msg;
+  el.style.color = isErr ? 'var(--danger)' : 'var(--text-sub)';
+}
+
+const hadSavedParams = loadParamsFromLocalStorage();
+
+function renderParams(){
+  const grid = document.getElementById('params-grid');
+  grid.innerHTML = '';
+  PARAM_DEFS.forEach(p=>{
+    const div = document.createElement('div');
+    div.className='param';
+    const inputType = p.type==='text' ? 'text' : 'number';
+    const stepAttr = p.type==='text' ? '' : `step="${p.step}"`;
+    const val = params[p.key]==null ? '' : params[p.key];
+    div.innerHTML = `<label>${p.label}</label><input type="${inputType}" ${stepAttr} id="param-${p.key}" value="${val}">`;
+    grid.appendChild(div);
+  });
+}
+renderParams();
+
+function readParamsFromUI(){
+  PARAM_DEFS.forEach(p=>{
+    const el = document.getElementById('param-'+p.key);
+    if(p.type==='text'){
+      params[p.key] = el.value;
+    }else{
+      const v = parseFloat(el.value);
+      if(!isNaN(v)) params[p.key] = v;
+    }
+  });
+  updateHeaderSummary();
+  saveParamsToLocalStorage();
+}
+
+function updateHeaderSummary(){
+  const {hasBattery, hasEv} = systemFlags();
+
+  let titleText = 'Dashboard Solar';
+  if(hasBattery && hasEv) titleText += ' + Bateria + Veículos Elétricos';
+  else if(hasBattery) titleText += ' + Bateria';
+  else if(hasEv) titleText += ' + Veículos Elétricos';
+  const titleEl = document.getElementById('header-title');
+  if(titleEl) titleEl.textContent = '☀️ ' + titleText;
+  document.title = titleText + ' — Instalação Residencial';
+
+  const el = document.getElementById('header-sub');
+  if(!el) return;
+  const bits = [`${params.kwp} kWp`, params.inversor_modelo];
+  if(hasBattery) bits.push(`${params.bateria_modelo} ${params.bateria_capacidade_kwh}kWh`);
+  if(hasEv && params.evs_info) bits.push(params.evs_info);
+  el.textContent = bits.filter(Boolean).join(' · ');
+}
+
+function exportParamsJSON(){
+  const blob = new Blob([JSON.stringify(params, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'parametros-instalacao.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importParamsJSON(file){
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    try{
+      const loaded = JSON.parse(ev.target.result);
+      Object.assign(params, loaded);
+      renderParams();
+      updateHeaderSummary();
+      saveParamsToLocalStorage();
+      fullRender();
+    }catch(err){
+      alert('Ficheiro de parâmetros inválido: '+err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ============================================================
+   UTILITÁRIOS
+============================================================ */
+function toNumber(str){
+  if(str===undefined||str===null) return null;
+  if(typeof str==='number') return str;
+  let s = String(str).trim();
+  if(s==='') return null;
+  const hasComma = s.includes(',');
+  const hasDot = s.includes('.');
+  if(hasComma && hasDot){
+    // ambos presentes: o separador que aparece por último é o decimal, o outro é milhares
+    const lastComma = s.lastIndexOf(',');
+    const lastDot = s.lastIndexOf('.');
+    if(lastComma > lastDot){
+      s = s.replace(/\./g,'').replace(',', '.'); // "1.234,56" (europeu)
+    }else{
+      s = s.replace(/,/g,''); // "1,234.56" (inglês/americano)
+    }
+  }else if(hasComma && !hasDot){
+    s = s.replace(',', '.'); // "320,5" -> decimal europeu, sem milhares
+  }
+  // se só houver ponto (ou nenhum separador), não mexe — "1.33" já é válido em JS
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+function monthKeyFromDate(d){
+  if(!(d instanceof Date) || isNaN(d)) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  return `${y}-${m}`;
+}
+
+function excelDateToJSDate(v){
+  if(v instanceof Date) return v;
+  if(typeof v === 'number'){
+    // XLSX serial date
+    const utc_days = Math.floor(v - 25569);
+    const utc_value = utc_days * 86400;
+    const date_info = new Date(utc_value * 1000);
+    const fractional_day = v - Math.floor(v) + 0.0000001;
+    let total_seconds = Math.floor(86400 * fractional_day);
+    const seconds = total_seconds % 60;
+    total_seconds -= seconds;
+    const hours = Math.floor(total_seconds / (60*60));
+    const minutes = Math.floor(total_seconds / 60) % 60;
+    return new Date(date_info.getFullYear(), date_info.getMonth(), date_info.getDate(), hours, minutes, seconds);
+  }
+  if(typeof v === 'string'){
+    const s = v.trim();
+    // formato explícito "YYYY-MM-DD HH:MM:SS" ou "YYYY-MM-DDTHH:MM:SS" — construído por componentes
+    // para garantir hora LOCAL consistente em Chrome, Edge e Firefox (o parsing nativo de
+    // strings com espaço em vez de 'T' não é garantido pela spec e varia: o V8 trata-o como UTC).
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if(m){
+      return new Date(
+        parseInt(m[1],10), parseInt(m[2],10)-1, parseInt(m[3],10),
+        parseInt(m[4],10), parseInt(m[5],10), m[6]?parseInt(m[6],10):0
+      );
+    }
+    // formato "YYYY-MM-DD" sem hora — o Date() nativo trata ISO sem hora como UTC meia-noite,
+    // o que desloca o dia ao converter para hora local (ex: Açores). Construção explícita local.
+    const mDateOnly = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(mDateOnly){
+      return new Date(parseInt(mDateOnly[1],10), parseInt(mDateOnly[2],10)-1, parseInt(mDateOnly[3],10));
+    }
+    // formato "DD/MM/YYYY HH:MM" ou similar — fallback explícito
+    const m2 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T]?(\d{1,2})?:?(\d{1,2})?/);
+    if(m2){
+      return new Date(
+        parseInt(m2[3],10), parseInt(m2[2],10)-1, parseInt(m2[1],10),
+        m2[4]?parseInt(m2[4],10):0, m2[5]?parseInt(m2[5],10):0
+      );
+    }
+    // último recurso: parsing nativo (menos garantido entre browsers)
+    const parsed = new Date(s);
+    if(!isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+/* ============================================================
+   COMPOSIÇÃO DO SISTEMA POR MÊS E SEGMENTAÇÃO DINÂMICA DE FASES
+   Sem fronteiras de data fixas: cada mês é classificado pela presença
+   real de dados de bateria (bat_carga/bat_descarga != null nesse mês)
+   e/ou de sessões wallbox nesse mês. Sequências consecutivas de meses
+   com a mesma composição formam uma fase — o número de fases (1 a 4)
+   e o que cada uma significa decorrem inteiramente dos dados
+   carregados, não de datas assumidas.
+============================================================ */
+const COMP_META = {
+  '':   {label:'Só PV',                              cls:'f1', color:'#94A3B8'},
+  'B':  {label:'PV + Bateria',                        cls:'f2', color:'#6366F1'},
+  'E':  {label:'PV + Veículo Elétrico',               cls:'f4', color:'#F4A261'},
+  'BE': {label:'PV + Bateria + Veículo Elétrico',     cls:'f3', color:'#10B981'}
+};
+
+function firstMonthWith(months, predicate){
+  for(const mk of months){ if(predicate(mk)) return mk; }
+  return null;
+}
+
+/* A presença de bateria/EV é tratada como monótona a partir do primeiro mês em que há
+   evidência nos dados — não reavaliada mês a mês. Um mês sem sessões wallbox (o utilizador
+   não carregou em casa nesse mês — férias, carregador público, etc.) ou uma linha do
+   FusionSolar com o campo de bateria a null por acaso não significa que o equipamento foi
+   desinstalado; sem isto, um único mês "silencioso" fragmentava a tabela de fases em
+   segmentos espúrios que iam e vinham. */
+function buildSegments(months, wbMonth){
+  const firstBatMonth = firstMonthWith(months, mk=>{
+    const r = state.monthly[mk];
+    return !!(r && (r.bat_carga!=null || r.bat_descarga!=null));
+  });
+  const firstEvMonth = firstMonthWith(months, mk=> !!(wbMonth[mk] && wbMonth[mk].sessions>0));
+
+  const segments = [];
+  months.forEach(mk=>{
+    const hasBat = firstBatMonth!=null && mk>=firstBatMonth;
+    const hasEv = firstEvMonth!=null && mk>=firstEvMonth;
+    const comp = (hasBat?'B':'') + (hasEv?'E':'');
+    const last = segments[segments.length-1];
+    if(!last || last.comp !== comp){
+      segments.push({comp, months:[mk]});
+    }else{
+      last.months.push(mk);
+    }
+  });
+  return segments;
+}
+
+function segmentPeriodLabel(seg){
+  const first = seg.months[0], last = seg.months[seg.months.length-1];
+  return first===last ? first : `${first} a ${last}`;
+}
+
+/* Converte um monthKey ("AAAA-MM") previsto de payback no índice do eixo X do gráfico
+   G4. Se o mês cair dentro do histórico real, o índice é exato (uma entrada por mês).
+   Se cair na zona de projeção, essa zona só tem resolução anual ("Ano 1".."Ano 25"),
+   por isso aproxima-se ao marco anual mais próximo — não faz sentido fingir precisão
+   mensal num eixo que não a tem. */
+function paybackChartIndex(marker, months){
+  if(!marker || !marker.monthKey) return null;
+  const idxInMonths = months.indexOf(marker.monthKey);
+  if(idxInMonths>=0) return idxInMonths;
+  const lastMonth = months[months.length-1];
+  const [ly,lm] = lastMonth.split('-').map(Number);
+  const [py,pm] = marker.monthKey.split('-').map(Number);
+  const monthsElapsed = (py-ly)*12 + (pm-lm);
+  const N = Math.max(1, Math.min(25, Math.ceil(monthsElapsed/12)));
+  return months.length + N - 1; // "Ano N" fica a months.length + N - 1 no array de labels
+}
+
+function systemFlags(){
+  const hasBattery = Object.keys(state.monthly).some(mk=>{
+    const r = state.monthly[mk];
+    return r.bat_carga!=null || r.bat_descarga!=null;
+  });
+  const hasEv = state.wallboxSessions.length>0;
+  return {hasBattery, hasEv};
+}
+
+function setStatus(id, msg, isErr){
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'status-line' + (isErr?' err':'');
+}
+
+/* ============================================================
+   GESTÃO DE DOCUMENTOS CARREGADOS
+   state.monthly / state.wallboxSessions deixam de ser a fonte de verdade — passam a ser
+   DERIVADOS de state.loadedDocuments, recalculados de raiz sempre que a lista muda
+   (adicionar ou remover). Isto garante que remover um documento dá exatamente o
+   resultado que se teria se esse ficheiro nunca tivesse sido carregado, incluindo
+   reposição correta do que outro documento tinha escrito por cima ou por baixo dele —
+   uma subtração direta sobre o estado fundido não conseguiria garantir isto com
+   segurança (um mês pode ter sido escrito por mais do que um documento).
+============================================================ */
+const DOC_TYPE_LABEL = {
+  'fusion-annual': 'FusionSolar Anual',
+  'fusion-daily': 'FusionSolar Mensal',
+  'wallbox': 'Wallbox'
+};
+
+function dedupeSessions(sessions){
+  // sessões idênticas (mesmo instante de início + mesmo kWh) contam-se como a mesma
+  // sessão duplicada — protege mesmo dentro de um único ficheiro, caso a exportação da
+  // Wallbox por vezes repita uma linha.
+  const seen = new Set();
+  const deduped = [];
+  let dupCount = 0;
+  sessions.forEach(s=>{
+    const key = s.start.getTime() + '|' + s.kwh.toFixed(3);
+    if(seen.has(key)){ dupCount++; return; }
+    seen.add(key);
+    deduped.push(s);
+  });
+  return { sessions: deduped, dupCount };
+}
+
+function addDocument(doc){
+  // a wallbox só tem 1 "slot" — um novo ficheiro substitui o anterior, nunca acumula
+  if(doc.type==='wallbox'){
+    state.loadedDocuments = state.loadedDocuments.filter(d=>d.type!=='wallbox');
+  }
+  doc.id = 'doc_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+  doc.loadedAt = new Date();
+  state.loadedDocuments.push(doc);
+}
+
+function rebuildStateFromDocuments(){
+  const monthly = {};
+  let wallboxSessions = [];
+  state.loadedDocuments.forEach(doc=>{
+    if(doc.type==='fusion-annual'){
+      Object.assign(monthly, doc.payload.monthly);
+    }else if(doc.type==='fusion-daily'){
+      monthly[doc.payload.monthKey] = doc.payload.rec;
+    }else if(doc.type==='wallbox'){
+      wallboxSessions = doc.payload.sessions;
+    }
+  });
+  state.monthly = monthly;
+  state.wallboxSessions = wallboxSessions;
+  state.wallboxLoaded = wallboxSessions.length>0;
+}
+
+function removeDocument(docId){
+  const idx = state.loadedDocuments.findIndex(d=>d.id===docId);
+  if(idx===-1) return;
+  state.loadedDocuments.splice(idx,1);
+  rebuildStateFromDocuments();
+  renderDocList();
+  fullRender();
+}
+
+/* Repõe as linhas de estado das 3 dropzones para refletirem sempre a realidade atual
+   (quantos documentos de cada tipo existem agora), em vez de uma mensagem "acabei de
+   carregar X" que ficava desatualizada assim que um documento era removido. */
+function syncDropzoneStatuses(){
+  const annualDocs = state.loadedDocuments.filter(d=>d.type==='fusion-annual');
+  const dailyDocs = state.loadedDocuments.filter(d=>d.type==='fusion-daily');
+  const wbDoc = state.loadedDocuments.find(d=>d.type==='wallbox');
+
+  setStatus('status-fusion', annualDocs.length===0 ? 'Nenhum ficheiro carregado' :
+    `${annualDocs.length} ficheiro(s) anual(is) carregado(s)`);
+  setStatus('status-daily', dailyDocs.length===0 ? 'Nenhum ficheiro carregado' :
+    `${dailyDocs.length} mês(es) carregado(s) via Relatório Mensal`);
+  setStatus('status-wallbox', wbDoc ? `Wallbox carregada (${wbDoc.summary})` : 'Nenhum ficheiro carregado');
+}
+
+function renderDocList(){
+  const container = document.getElementById('doc-list-container');
+  const body = document.getElementById('doc-list-body');
+  if(state.loadedDocuments.length===0){ container.style.display='none'; body.innerHTML=''; return; }
+  container.style.display='block';
+  body.innerHTML = state.loadedDocuments.map(doc=>`
+    <div class="doc-row">
+      <div class="doc-info">
+        <span class="doc-name">${doc.filename}</span>
+        <span class="doc-summary"><span class="doc-type-badge">${DOC_TYPE_LABEL[doc.type]}</span>${doc.summary}</span>
+      </div>
+      <button class="btn-remove-doc" data-remove-doc="${doc.id}">Remover</button>
+    </div>
+  `).join('');
+  body.querySelectorAll('[data-remove-doc]').forEach(btn=>{
+    btn.addEventListener('click', ()=> removeDocument(btn.getAttribute('data-remove-doc')));
+  });
+}
+
+/* ============================================================
+   LEITURA DE FICHEIRO — normaliza CSV ou XLSX para um array de arrays
+   (linhas x colunas), independentemente do formato de origem.
+============================================================ */
+function detectDelimiter(headerLine){
+  const semi = (headerLine.match(/;/g)||[]).length;
+  const comma = (headerLine.match(/,/g)||[]).length;
+  return semi >= comma ? ';' : ',';
+}
+
+function textToRows(text){
+  const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+  if(lines.length===0) return [];
+  const delim = detectDelimiter(lines[0]);
+  return lines.map(l=> l.split(delim).map(c=>c.trim()));
+}
+
+/* Alguns ficheiros .xlsx trazem uma dimensão (!ref) desatualizada — por exemplo, declaram
+   que os dados começam na linha 4 quando na verdade começam na linha 1. O SheetJS confia
+   cegamente nessa meta-informação e ignora tudo o que está fora dela, sem aviso. Isto
+   recalcula o intervalo real a partir das células que existem de facto na folha. */
+function fixSheetRange(sheet){
+  let minR=Infinity, maxR=-Infinity, minC=Infinity, maxC=-Infinity;
+  Object.keys(sheet).forEach(k=>{
+    if(k[0]==='!') return;
+    const addr = XLSX.utils.decode_cell(k);
+    if(addr.r<minR) minR=addr.r;
+    if(addr.r>maxR) maxR=addr.r;
+    if(addr.c<minC) minC=addr.c;
+    if(addr.c>maxC) maxC=addr.c;
+  });
+  if(minR===Infinity) return sheet; // folha vazia, nada a corrigir
+  sheet['!ref'] = XLSX.utils.encode_range({s:{r:minR,c:minC}, e:{r:maxR,c:maxC}});
+  return sheet;
+}
+
+function fileToRows(file){
+  const ext = file.name.toLowerCase().split('.').pop();
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onerror = ()=> reject(new Error('Erro a ler o ficheiro: '+file.name));
+    if(ext === 'csv'){
+      reader.onload = ev=>{
+        try{ resolve(textToRows(ev.target.result)); }catch(err){ reject(err); }
+      };
+      reader.readAsText(file, 'iso-8859-1'); // latin1 — cobre PT com acentuação
+    }else{
+      reader.onload = ev=>{
+        try{
+          const data = new Uint8Array(ev.target.result);
+          const wb = XLSX.read(data, {type:'array', cellDates:true});
+          const sheet = fixSheetRange(wb.Sheets[wb.SheetNames[0]]);
+          const raw = XLSX.utils.sheet_to_json(sheet, {header:1, defval:null});
+          resolve(raw.map(row => (row||[]).map(c => c==null ? '' : c)));
+        }catch(err){ reject(err); }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  });
+}
+
+/* ============================================================
+   MAPEAMENTO DE COLUNAS — tolerante a português e inglês (FusionSolar
+   exporta em ambos consoante a região da conta). Cada campo é procurado
+   com o seu próprio predicado auto-exclusivo, para não haver dependência
+   da ordem das colunas nem risco de substring apanhar o campo errado
+   (ex: "autoconsumo" contém "consumo"; "discharge" contém "charge";
+   "Loss Due to Export Limitation" contém "export").
+============================================================ */
+function mapHeaderIndices(header){
+  const hl = header.map(h => typeof h === 'string' ? h.toLowerCase() : '');
+  const find = pred => hl.findIndex(pred);
+  return {
+    mes: find(h=> h.includes('tempo estat') || h.includes('statistical period')),
+    pv: find(h=> h.includes('rendimento pv') || h.includes('pv yield')),
+    inversor: find(h=> h.includes('rendimento do inversor') || h.includes('inverter yield')),
+    taxa_auto: find(h=> (h.includes('autoconsumo') && h.includes('taxa')) || (h.includes('self-consumption') && h.includes('rate'))),
+    autoconsumo: find(h=> (h.includes('autoconsumo') && !h.includes('taxa')) || (h.includes('self-consumption') && !h.includes('rate'))),
+    consumo: find(h=> (h.includes('consumo') && !h.includes('autoconsumo')) || (h.includes('consumption') && !h.includes('self-consumption'))),
+    exportacao: find(h=> (h.includes('exporta') || h.includes('export')) && !h.includes('limit') && !h.includes('limita')),
+    importacao: find(h=> (h.includes('importa') || h.includes('import')) && !h.includes('limit') && !h.includes('limita')),
+    esp: find(h=> h.includes('energia espec') || h.includes('specific energy')),
+    co2: find(h=> h.includes('evitado') || h.includes('avoided')), // carácter CO2 por vezes partido — não procurar 'co2' literal
+    bat_descarga: find(h=> h.includes('capacidade de descarga') || h.includes('descarga') || h.includes('discharge')),
+    bat_carga: find(h=> h.includes('capacidade de carga') || (h.includes('carga') && !h.includes('descarga')) || (h.includes('charge') && !h.includes('discharge')))
+  };
+}
+
+function findHeaderRowIdx(rows){
+  const idx = rows.findIndex(row => Array.isArray(row) && row.some(cell => typeof cell === 'string' && (cell.toLowerCase().includes('tempo estat') || cell.toLowerCase().includes('statistical period'))));
+  return idx === -1 ? 0 : idx; // fallback: assume que é mesmo a primeira linha
+}
+
+/* ============================================================
+   PARSER — FUSIONSOLAR RELATÓRIO ANUAL (granularidade mensal)
+   Cada linha do ficheiro já é um mês completo — sem agregação.
+============================================================ */
+async function parseAnnualFile(file){
+  const rows = await fileToRows(file);
+  if(rows.length===0) throw new Error('Ficheiro vazio: '+file.name);
+  const headerRowIdx = findHeaderRowIdx(rows);
+  const header = rows[headerRowIdx];
+  const idx = mapHeaderIndices(header);
+  const dataRows = rows.slice(headerRowIdx+1);
+
+  const monthly = {};
+  let count = 0;
+  dataRows.forEach(row=>{
+    if(!row || row.every(c=>c==null||c==='')) return;
+    const mesRaw = idx.mes>=0 ? String(row[idx.mes]||'').trim() : '';
+    // qualquer linha sem um padrão de mês reconhecível é ignorada (cabeçalhos repetidos,
+    // linhas de 'Média'/'Average'/'Total' em qualquer idioma, títulos, etc.)
+    const m = mesRaw.match(/(\d{4})[-\/](\d{1,2})/);
+    if(!m) return;
+    const monthKey = `${m[1]}-${String(m[2]).padStart(2,'0')}`;
+    monthly[monthKey] = {
+      pv_kwh: toNumber(row[idx.pv]),
+      inversor_kwh: toNumber(row[idx.inversor]),
+      exportacao: toNumber(row[idx.exportacao]),
+      importacao: toNumber(row[idx.importacao]),
+      esp_kwh_kwp: toNumber(row[idx.esp]),
+      consumo: toNumber(row[idx.consumo]),
+      autoconsumo: toNumber(row[idx.autoconsumo]),
+      taxa_autoconsumo: toNumber(row[idx.taxa_auto]),
+      co2_evitado: toNumber(row[idx.co2]),
+      bat_carga: idx.bat_carga>=0 ? toNumber(row[idx.bat_carga]) : null,
+      bat_descarga: idx.bat_descarga>=0 ? toNumber(row[idx.bat_descarga]) : null,
+    };
+    count++;
+  });
+  return { monthly, count };
+}
+
+/* ============================================================
+   PARSER — FUSIONSOLAR RELATÓRIO MENSAL (granularidade diária)
+   Agrega por soma todas as linhas do ficheiro num único mês.
+============================================================ */
+async function parsePartialMonthFile(file){
+  const rows = await fileToRows(file);
+  if(rows.length===0) throw new Error('Ficheiro vazio: '+file.name);
+  const headerRowIdx = findHeaderRowIdx(rows);
+  const header = rows[headerRowIdx];
+  const idx = mapHeaderIndices(header);
+  const dataRows = rows.slice(headerRowIdx+1);
+
+  const sums = {pv_kwh:0, inversor_kwh:0, exportacao:0, importacao:0, consumo:0, autoconsumo:0, co2_evitado:0, bat_carga:0, bat_descarga:0};
+  let hasBat = false;
+  let monthKey = null;
+
+  dataRows.forEach(row=>{
+    if(!row || row.every(c=>c==null||c==='')) return;
+    if(idx.mes>=0){
+      const d = excelDateToJSDate(row[idx.mes]);
+      if(d && !monthKey) monthKey = monthKeyFromDate(d);
+    }
+    sums.pv_kwh += toNumber(row[idx.pv]) || 0;
+    sums.inversor_kwh += toNumber(row[idx.inversor]) || 0;
+    sums.exportacao += toNumber(row[idx.exportacao]) || 0;
+    sums.importacao += toNumber(row[idx.importacao]) || 0;
+    sums.consumo += toNumber(row[idx.consumo]) || 0;
+    sums.autoconsumo += toNumber(row[idx.autoconsumo]) || 0;
+    sums.co2_evitado += toNumber(row[idx.co2]) || 0;
+    if(idx.bat_carga>=0 && row[idx.bat_carga]!=null && row[idx.bat_carga]!==''){ sums.bat_carga += toNumber(row[idx.bat_carga])||0; hasBat = true; }
+    if(idx.bat_descarga>=0 && row[idx.bat_descarga]!=null && row[idx.bat_descarga]!==''){ sums.bat_descarga += toNumber(row[idx.bat_descarga])||0; hasBat = true; }
+  });
+
+  if(!monthKey){
+    // fallback: tenta extrair do nome do ficheiro, aceitando AAAA-MM ou MM-AAAA
+    let m = file.name.match(/(\d{4})[-_](\d{2})(?!\d)/);
+    if(m){ monthKey = `${m[1]}-${m[2]}`; }
+    else{
+      m = file.name.match(/(?<!\d)(\d{2})[-_](\d{4})/);
+      if(m) monthKey = `${m[2]}-${m[1]}`;
+    }
+  }
+  if(!monthKey) throw new Error('Não foi possível determinar o mês do ficheiro: '+file.name);
+
+  const taxa_autoconsumo = sums.consumo>0 ? (sums.autoconsumo/sums.consumo*100) : null;
+  const esp_kwh_kwp = params.kwp>0 ? (sums.pv_kwh/params.kwp) : null;
+
+  return {
+    monthKey,
+    rec: {
+      pv_kwh: sums.pv_kwh,
+      inversor_kwh: sums.inversor_kwh,
+      exportacao: sums.exportacao,
+      importacao: sums.importacao,
+      esp_kwh_kwp,
+      consumo: sums.consumo,
+      autoconsumo: sums.autoconsumo,
+      taxa_autoconsumo,
+      co2_evitado: sums.co2_evitado,
+      bat_carga: hasBat ? sums.bat_carga : null,
+      bat_descarga: hasBat ? sums.bat_descarga : null
+    }
+  };
+}
+
+/* ============================================================
+   PARSER — WALLBOX XLSX (sem header, por posição)
+============================================================ */
+function parseWallboxXLSX(workbook){
+  const sheetName = workbook.SheetNames[0];
+  const sheet = fixSheetRange(workbook.Sheets[sheetName]);
+  const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:null});
+  const sessions = [];
+  rows.forEach(row=>{
+    if(!row || row.length < 6) return;
+    const kwh = toNumber(row[2]);
+    const start = excelDateToJSDate(row[3]);
+    const stop = excelDateToJSDate(row[4]);
+    const duration_min = toNumber(row[5]);
+    if(kwh==null || !start) return; // ignora linha de cabeçalho / inválida
+    sessions.push({ kwh, start, stop, duration_min });
+  });
+  return sessions;
+}
+
+/* ============================================================
+   CLASSIFICAÇÃO ORIGEM ENERGIA EV
+============================================================ */
+function classifySession(session){
+  const hour = session.start.getHours();
+  // Solar/Armazenado: 09h-22h (exclusive); Rede-Vazio: 22h-08h(inclusive)+08h-09h
+  if(hour >= 9 && hour < 22) return 'solar';
+  return 'rede';
+}
+
+/* ============================================================
+   PROCESSAMENTO PRINCIPAL
+============================================================ */
+function monthsSorted(){
+  return Object.keys(state.monthly).sort();
+}
+
+function wallboxByMonth(){
+  const map = {}; // monthKey -> {kwh_total, kwh_solar, kwh_rede, sessions}
+  state.wallboxSessions.forEach(s=>{
+    const mk = monthKeyFromDate(s.start);
+    if(!mk) return;
+    if(!map[mk]) map[mk] = {kwh_total:0, kwh_solar:0, kwh_rede:0, sessions:0};
+    map[mk].kwh_total += s.kwh;
+    map[mk].sessions += 1;
+    if(classifySession(s)==='solar') map[mk].kwh_solar += s.kwh;
+    else map[mk].kwh_rede += s.kwh;
+  });
+  return map;
+}
+
+function computeAll(){
+  const months = monthsSorted();
+  if(months.length===0) return null;
+
+  const wbMonth = wallboxByMonth();
+  state.batteryAvailable = months.some(m=> state.monthly[m].bat_carga!=null || state.monthly[m].bat_descarga!=null);
+
+  let sum = {pv:0, consumo:0, autoconsumo:0, importacao:0, exportacao:0, co2:0, batCarga:0, batDescarga:0};
+  let batMonths = 0;
+
+  months.forEach(mk=>{
+    const r = state.monthly[mk];
+    sum.pv += r.pv_kwh||0;
+    sum.consumo += r.consumo||0;
+    sum.autoconsumo += r.autoconsumo||0;
+    sum.importacao += r.importacao||0;
+    sum.exportacao += r.exportacao||0;
+    sum.co2 += r.co2_evitado||0;
+    if(r.bat_carga!=null) { sum.batCarga += r.bat_carga; batMonths++; }
+    if(r.bat_descarga!=null) sum.batDescarga += r.bat_descarga;
+  });
+
+  // fases dinâmicas: agrupa meses consecutivos com a mesma composição
+  // real (bateria presente? EV presente?) — ver buildSegments() acima.
+  const segments = buildSegments(months, wbMonth);
+  segments.forEach(seg=>{
+    seg.pv=0; seg.consumo=0; seg.autoconsumo=0; seg.importacao=0; seg.wallbox=0;
+    seg.months.forEach(mk=>{
+      const r = state.monthly[mk];
+      seg.pv += r.pv_kwh||0;
+      seg.consumo += r.consumo||0;
+      seg.autoconsumo += r.autoconsumo||0;
+      seg.importacao += r.importacao||0;
+      seg.wallbox += (wbMonth[mk]?wbMonth[mk].kwh_total:0);
+    });
+  });
+
+  const autossuficiencia_global = sum.consumo>0 ? (sum.autoconsumo/sum.consumo*100) : 0;
+  const taxa_autoconsumo_global = sum.pv>0 ? (sum.autoconsumo/sum.pv*100) : 0; // aproximação global (não fornecida directamente)
+
+  // wallbox totais
+  let wbTotalKwh=0, wbSolarKwh=0, wbRedeKwh=0, wbSessions=0;
+  Object.values(wbMonth).forEach(v=>{
+    wbTotalKwh += v.kwh_total; wbSolarKwh += v.kwh_solar; wbRedeKwh += v.kwh_rede; wbSessions += v.sessions;
+  });
+
+  // económico
+  const nMeses = months.length;
+  const poupanca_bruta = sum.autoconsumo * params.tarifa_fora_vazio;
+  const poupanca_anual = nMeses>0 ? (poupanca_bruta / nMeses * 12) : 0;
+
+  const cost_ev_real = wbRedeKwh * params.tarifa_vazio;
+  const cost_ev_mix = wbTotalKwh * (params.tarifa_vazio*0.4 + params.tarifa_fora_vazio*0.6);
+  const saving_ev = cost_ev_mix - cost_ev_real;
+  // anualizar poupança EV com base nos meses de Fase 3 com dados wallbox
+  const mesesComWallbox = Object.keys(wbMonth).length;
+  const saving_ev_anualizado = mesesComWallbox>0 ? (saving_ev/mesesComWallbox*12) : 0;
+
+  const poupanca_total_anual = poupanca_anual + saving_ev_anualizado;
+  const payback_pv = poupanca_anual>0 ? (params.invest_liquido/poupanca_anual) : null;
+  const payback_combinado = poupanca_total_anual>0 ? (params.invest_liquido/poupanca_total_anual) : null;
+
+  // projeção 25 anos
+  const degradacao = 0.005;
+  let poupanca_25y = 0;
+  const projArray = [];
+  let cum = 0;
+  for(let ano=0; ano<25; ano++){
+    const valorAno = poupanca_total_anual * Math.pow(1-degradacao, ano);
+    poupanca_25y += valorAno;
+    cum += valorAno;
+    projArray.push(cum);
+  }
+  const lucro_25y = poupanca_25y - params.invest_liquido;
+  const roi_25y = params.invest_liquido>0 ? (lucro_25y/params.invest_liquido*100) : 0;
+
+  /* Curva real de poupança PV acumulada mês a mês — usada tanto para desenhar o G4 como
+     para localizar a data (não só os anos) em que o payback acontece de facto. */
+  let cumRealPV = 0;
+  const realCumPV = months.map(mk=>{ cumRealPV += (state.monthly[mk].autoconsumo||0) * params.tarifa_fora_vazio; return cumRealPV; });
+
+  /* Data prevista de payback: percorre primeiro o histórico real mês a mês (precisão
+     exata); se o investimento ainda não foi atingido nos dados carregados, continua a
+     projeção mês a mês (com a mesma degradação de 0,5%/ano da projeção de 25 anos) a
+     partir do último mês real, até encontrar o mês em que a poupança acumulada cruza o
+     investimento líquido — ou devolve null se isso não acontecer dentro de 25 anos. */
+  function projectPaybackMonth(startCum, startMonthKey, annualBase){
+    if(startCum >= params.invest_liquido) return { monthKey: startMonthKey, alreadyReached:true };
+    if(annualBase<=0) return null;
+    let cum = startCum;
+    let [y,m] = startMonthKey.split('-').map(Number);
+    for(let i=1;i<=25*12;i++){
+      m++; if(m>12){ m=1; y++; }
+      const anoIdx = Math.floor((i-1)/12);
+      cum += (annualBase * Math.pow(1-degradacao, anoIdx)) / 12;
+      if(cum >= params.invest_liquido) return { monthKey:`${y}-${String(m).padStart(2,'0')}`, alreadyReached:false };
+    }
+    return null;
+  }
+
+  const lastMonthKey = months[months.length-1];
+
+  // só PV: procura primeiro dentro do histórico real (mês exato), só depois projeta
+  let payback_date_pv = null;
+  for(let i=0;i<realCumPV.length;i++){
+    if(realCumPV[i] >= params.invest_liquido){ payback_date_pv = { monthKey: months[i], alreadyReached:true }; break; }
+  }
+  if(!payback_date_pv){
+    payback_date_pv = projectPaybackMonth(realCumPV[realCumPV.length-1]||0, lastMonthKey, poupanca_anual);
+  }
+  if(payback_date_pv) payback_date_pv.chartIndex = paybackChartIndex(payback_date_pv, months);
+
+  // combinado: a parte EV do "já alcançado" é só um total (não há série mensal fina de
+  // poupança EV), por isso usa-se o total acumulado até agora como ponto de partida da
+  // projeção, em vez de percorrer mês a mês como no caso só-PV.
+  const cumRealCombinadoAteAgora = (realCumPV[realCumPV.length-1]||0) + saving_ev;
+  let payback_date_combinado = projectPaybackMonth(cumRealCombinadoAteAgora, lastMonthKey, poupanca_total_anual);
+  if(payback_date_combinado) payback_date_combinado.chartIndex = paybackChartIndex(payback_date_combinado, months);
+
+  // bateria
+  let batRes = null;
+  if(state.batteryAvailable && sum.batCarga>0){
+    const eficiencia = (sum.batDescarga/sum.batCarga*100);
+    const ciclos = sum.batCarga/params.bateria_capacidade_kwh;
+    const vidaUtilAnos = batMonths>0 ? (6000/(ciclos/batMonths*12)) : null;
+    batRes = {
+      carga: sum.batCarga, descarga: sum.batDescarga, eficiencia, ciclos,
+      vidaUtilAnos
+    };
+  }
+
+  return {
+    months, sum, segments, wbMonth,
+    autossuficiencia_global, taxa_autoconsumo_global,
+    wbTotalKwh, wbSolarKwh, wbRedeKwh, wbSessions,
+    poupanca_bruta, poupanca_anual,
+    cost_ev_real, cost_ev_mix, saving_ev, saving_ev_anualizado,
+    poupanca_total_anual, payback_pv, payback_combinado,
+    payback_date_pv, payback_date_combinado, realCumPV,
+    poupanca_25y, lucro_25y, roi_25y, projArray,
+    batRes, nMeses
+  };
+}
+
+/* ============================================================
+   FORMATAÇÃO
+============================================================ */
+const fmt = (n, dec=0) => n==null || isNaN(n) ? '—' : n.toLocaleString('pt-PT',{minimumFractionDigits:dec, maximumFractionDigits:dec});
+const fmtEUR = (n, dec=0) => n==null || isNaN(n) ? '—' : n.toLocaleString('pt-PT',{minimumFractionDigits:dec, maximumFractionDigits:dec}) + ' €';
+const fmtPct = (n, dec=1) => n==null || isNaN(n) ? '—' : n.toLocaleString('pt-PT',{minimumFractionDigits:dec, maximumFractionDigits:dec}) + '%';
+
+const MESES_PT_ABREV = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+function fmtMonthShort(mk){
+  if(!mk) return null;
+  const [y,m] = mk.split('-').map(Number);
+  return `${MESES_PT_ABREV[m-1]}/${y}`;
+}
+function fmtPaybackDate(marker){
+  if(!marker) return '— (não atingido em 25 anos)';
+  const label = fmtMonthShort(marker.monthKey);
+  return marker.alreadyReached ? `Já atingido (${label})` : label;
+}
+
+/* ============================================================
+   RENDER — KPIs PRINCIPAIS
+============================================================ */
+function renderMainKPIs(res){
+  const target = document.getElementById('kpi-main-target');
+  const cards = [
+    {label:'Produção PV total', value: fmt(res.sum.pv,0)+' kWh'},
+    {label:'Consumo total', value: fmt(res.sum.consumo,0)+' kWh'},
+    {label:'Autoconsumo total', value: fmt(res.sum.autoconsumo,0)+' kWh'},
+    {label:'Importação total', value: fmt(res.sum.importacao,0)+' kWh'},
+    {label:'Autossuficiência global', value: fmtPct(res.autossuficiencia_global), cls:'teal'},
+    {label:'Taxa de autoconsumo (aprox.)', value: fmtPct(res.taxa_autoconsumo_global), cls:'orange'},
+    {label:'CO₂ evitado', value: fmt(res.sum.co2*1000,0)+' kg'},
+    {label:'Carregamento EVs', value: res.wbSessions>0 ? (fmt(res.wbTotalKwh,0)+' kWh · '+res.wbSessions+' sessões') : '0 kWh (sem wallbox carregada)'}
+  ];
+  target.innerHTML = `<div class="kpi-grid">${cards.map(c=>`
+    <div class="kpi-card">
+      <div class="label">${c.label}</div>
+      <div class="value ${c.cls||''}">${c.value}</div>
+    </div>`).join('')}</div>`;
+}
+
+function renderEcoTable(res){
+  const rows = [
+    ['Poupança bruta PV (€ acumulado)', fmtEUR(res.poupanca_bruta,0)],
+    ['Poupança anual projetada PV (€/ano)', fmtEUR(res.poupanca_anual,0)]
+  ];
+  if(res.wbSessions>0){
+    // sistema com wallbox carregada — mostra a decomposição PV vs. gestão EV
+    rows.push(
+      ['Poupança gestão EV — período (€)', fmtEUR(res.saving_ev,0)],
+      ['Poupança gestão EV — anualizada (€/ano)', fmtEUR(res.saving_ev_anualizado,0)],
+      ['Poupança total anual combinada (€/ano)', fmtEUR(res.poupanca_total_anual,0)],
+      ['Payback só PV (anos)', res.payback_pv!=null ? fmt(res.payback_pv,1) : '—'],
+      ['Payback combinado PV + gestão EV (anos)', res.payback_combinado!=null ? fmt(res.payback_combinado,1) : '—'],
+      ['Data prevista de payback (só PV)', fmtPaybackDate(res.payback_date_pv)],
+      ['Data prevista de payback (combinado)', fmtPaybackDate(res.payback_date_combinado)]
+    );
+  }else{
+    // sem wallbox carregada — sem linhas de EV; payback único (equivale a payback_pv)
+    rows.push(
+      ['Payback (anos)', res.payback_pv!=null ? fmt(res.payback_pv,1) : '—'],
+      ['Data prevista de payback', fmtPaybackDate(res.payback_date_pv)]
+    );
+  }
+  rows.push(
+    ['Poupança projetada 25 anos (€)', fmtEUR(res.poupanca_25y,0)],
+    ['Lucro líquido 25 anos (€)', fmtEUR(res.lucro_25y,0)],
+    ['ROI 25 anos (%)', fmtPct(res.roi_25y)]
+  );
+  document.querySelector('#table-eco tbody').innerHTML = rows.map(r=>`<tr><td>${r[0]}</td><td style="text-align:right;font-weight:600;">${r[1]}</td></tr>`).join('');
+  document.getElementById('kpi-eco-section').style.display='block';
+}
+
+function renderBatTable(res){
+  const sec = document.getElementById('kpi-bat-section');
+  if(!res.batRes){ sec.style.display='none'; return; }
+  const b = res.batRes;
+  const rows = [
+    ['Energia total carregada (kWh)', fmt(b.carga,0)],
+    ['Energia total descarregada (kWh)', fmt(b.descarga,0)],
+    ['Eficiência round-trip (%)', fmtPct(b.eficiencia)],
+    ['Ciclos estimados', fmt(b.ciclos,1)],
+    ['Vida útil estimada (anos, base 6000 ciclos)', b.vidaUtilAnos!=null ? fmt(b.vidaUtilAnos,1) : '—']
+  ];
+  document.querySelector('#table-bat tbody').innerHTML = rows.map(r=>`<tr><td>${r[0]}</td><td style="text-align:right;font-weight:600;">${r[1]}</td></tr>`).join('');
+  sec.style.display='block';
+}
+
+function renderPhaseTable(res){
+  const sec = document.getElementById('phase-section');
+  const segments = res.segments;
+  // com 1 fase só não há nada para comparar — a secção inteira deixa de fazer sentido
+  if(segments.length < 2){ sec.style.display='none'; return; }
+  const body = segments.map((seg,i)=>{
+    const meta = COMP_META[seg.comp];
+    const autossuf = seg.consumo>0 ? (seg.autoconsumo/seg.consumo*100) : 0;
+    const nMeses = seg.months.length;
+    return `<tr>
+      <td><span class="phase-badge ${meta.cls}">Fase ${i+1}</span></td>
+      <td>${meta.label} · ${segmentPeriodLabel(seg)}</td>
+      <td>${nMeses}</td>
+      <td>${fmt(seg.consumo/nMeses,0)} kWh</td>
+      <td>${fmtPct(autossuf)}</td>
+      <td>${fmt(seg.importacao/nMeses,0)} kWh</td>
+      <td>${seg.wallbox>0 ? fmt(seg.wallbox/nMeses,0)+' kWh' : '—'}</td>
+    </tr>`;
+  }).join('');
+  document.querySelector('#table-phase tbody').innerHTML = body;
+  sec.style.display='block';
+}
+
+/* ============================================================
+   GRÁFICOS
+============================================================ */
+function destroyChart(id){
+  if(state.charts[id]){ state.charts[id].destroy(); delete state.charts[id]; }
+}
+
+/* Gera uma imagem estática de cada gráfico para a impressão. Um <canvas> não é fiável em
+   impressão entre browsers (corta em largura fixa no Chrome/Edge; pode sair em branco no
+   Firefox porque o motor de impressão nem sempre repinta o bitmap do canvas). Uma <img>
+   normal escala com a página e imprime de forma idêntica nos três.
+   Devolve uma Promise que só resolve quando todas as imagens estiverem decodificadas —
+   gerar o src não chega, é preciso esperar a decodificação para evitar imagens em branco
+   se a impressão for despoletada demasiado cedo. */
+function preparePrintImages(){
+  const waits = [];
+  Object.values(state.charts).forEach(chart=>{
+    if(!chart || !chart.canvas) return;
+    const canvas = chart.canvas;
+    let img = canvas.parentElement.querySelector('img.print-chart-img');
+    if(!img){
+      img = document.createElement('img');
+      img.className = 'print-chart-img';
+      canvas.parentElement.appendChild(img);
+    }
+    try{
+      img.src = chart.toBase64Image('image/png', 1.0);
+      if(img.decode){
+        waits.push(img.decode().catch(()=>{}));
+      }else{
+        waits.push(new Promise(res=>{ img.onload = res; img.onerror = res; }));
+      }
+    }catch(err){
+      console.warn('Falha ao gerar imagem de impressão para um gráfico:', err);
+    }
+  });
+  return Promise.all(waits);
+}
+window.addEventListener('beforeprint', ()=>{ preparePrintImages(); });
+
+
+const chartDefaults = {
+  color: '#94A3B8',
+  gridColor: '#334155'
+};
+
+function baseScales(extra={}){
+  return Object.assign({
+    x:{ ticks:{color:chartDefaults.color, font:{size:11}}, grid:{color:'transparent'} },
+    y:{ ticks:{color:chartDefaults.color, font:{size:11}}, grid:{color:chartDefaults.gridColor} }
+  }, extra);
+}
+
+function renderG1(res, wbMonth){
+  destroyChart('g1');
+  const months = res.months;
+  const pv = months.map(m=>state.monthly[m].pv_kwh||0);
+  const importacao = months.map(m=>state.monthly[m].importacao||0);
+  const ev = months.map(m=> wbMonth[m]?wbMonth[m].kwh_total:0);
+  const residencial = months.map((m,i)=> Math.max(0,(state.monthly[m].consumo||0) - ev[i]));
+
+  const ctx = document.getElementById('chart-g1');
+  state.charts.g1 = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: months,
+      datasets:[
+        {label:'Produção PV', data:pv, backgroundColor:'#F4A261', order:1},
+        {label:'Consumo residencial', data:residencial, backgroundColor:'#264653', stack:'cons', order:2},
+        {label:'Carregamento EV', data:ev, backgroundColor:'#10B981', stack:'cons', order:2},
+        {label:'Importação rede', data:importacao, backgroundColor:'#E9C46A', order:3}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{labels:{color:chartDefaults.color}}, tooltip:{mode:'index', intersect:false} },
+      scales: baseScales()
+    }
+  });
+}
+
+function renderG2(res){
+  destroyChart('g2a'); destroyChart('g2b');
+  const months = res.months;
+  const autossuf = months.map(m=>{
+    const r = state.monthly[m];
+    return r.consumo>0 ? (r.autoconsumo/r.consumo*100) : null;
+  });
+  const taxaAuto = months.map(m=> state.monthly[m].taxa_autoconsumo);
+  const avg = arr=>{ const v=arr.filter(x=>x!=null); return v.length? v.reduce((a,b)=>a+b,0)/v.length : null; };
+  const avgAutossuf = avg(autossuf), avgTaxa = avg(taxaAuto);
+
+  state.charts.g2a = new Chart(document.getElementById('chart-g2a'), {
+    type:'line',
+    data:{ labels:months, datasets:[
+      {label:'Autossuficiência %', data:autossuf, borderColor:'#2A9D8F', backgroundColor:'rgba(42,157,143,0.15)', fill:true, tension:.25},
+      {label:'Média', data:months.map(()=>avgAutossuf), borderColor:'#2A9D8F', borderDash:[6,4], pointRadius:0, borderWidth:1}
+    ]},
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:chartDefaults.color}}}, scales: baseScales()}
+  });
+  state.charts.g2b = new Chart(document.getElementById('chart-g2b'), {
+    type:'line',
+    data:{ labels:months, datasets:[
+      {label:'Taxa autoconsumo %', data:taxaAuto, borderColor:'#F4A261', backgroundColor:'rgba(244,162,97,0.15)', fill:true, tension:.25},
+      {label:'Média', data:months.map(()=>avgTaxa), borderColor:'#F4A261', borderDash:[6,4], pointRadius:0, borderWidth:1}
+    ]},
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:chartDefaults.color}}}, scales: baseScales()}
+  });
+}
+
+function renderG3(res){
+  const card = document.getElementById('card-g3');
+  if(!res.batRes){ card.style.display='none'; return; }
+  card.style.display='block';
+  destroyChart('g3');
+  const months = res.months.filter(m=> state.monthly[m].bat_carga!=null);
+  const carga = months.map(m=>state.monthly[m].bat_carga||0);
+  const descarga = months.map(m=>state.monthly[m].bat_descarga||0);
+  state.charts.g3 = new Chart(document.getElementById('chart-g3'), {
+    type:'bar',
+    data:{ labels:months, datasets:[
+      {label:'Carga Luna', data:carga, backgroundColor:'#6366F1'},
+      {label:'Descarga Luna', data:descarga, backgroundColor:'#10B981'}
+    ]},
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:chartDefaults.color}},
+        subtitle:{display:true, text:`Eficiência round-trip: ${fmtPct(res.batRes.eficiencia)}`, color:chartDefaults.color}
+      },
+      scales: baseScales()}
+  });
+}
+
+/* Desenha uma linha vertical tracejada + rótulo no ponto do gráfico G4 onde a poupança
+   acumulada (real + projetada) atinge o investimento líquido. Os rótulos ficam dentro da
+   área do gráfico, encostados ao topo mas abaixo da legenda (que o Chart.js já reserva
+   fora de chartArea) — um problema já visto antes era o rótulo sobrepor-se à legenda. */
+function paybackMarkerPlugin(markers){
+  return {
+    id:'paybackMarkers',
+    afterDraw(chart){
+      const {ctx, chartArea, scales} = chart;
+      const x = scales.x;
+      if(!x || !markers.length) return;
+      ctx.save();
+      markers.forEach((mk, i)=>{
+        if(mk.index==null) return;
+        const px = x.getPixelForValue(mk.index);
+        if(px==null || isNaN(px)) return;
+        ctx.strokeStyle = mk.color;
+        ctx.setLineDash([4,3]);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(px, chartArea.top);
+        ctx.lineTo(px, chartArea.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = mk.color;
+        ctx.font = '600 10px sans-serif';
+        ctx.textAlign = 'left';
+        const tx = Math.min(px+4, chartArea.right-95);
+        ctx.fillText(mk.label, tx, chartArea.top + 12 + i*13);
+      });
+      ctx.restore();
+    }
+  };
+}
+
+function renderG4(res){
+  destroyChart('g4');
+  const months = res.months;
+  const real = res.realCumPV;
+  const projLabels = Array.from({length:25},(_, i)=>`Ano ${i+1}`);
+
+  const markers = [];
+  if(res.payback_date_pv && res.payback_date_pv.chartIndex!=null){
+    markers.push({ index: res.payback_date_pv.chartIndex, label: 'Payback PV: '+fmtMonthShort(res.payback_date_pv.monthKey), color:'#2A9D8F' });
+  }
+  if(res.wbSessions>0 && res.payback_date_combinado && res.payback_date_combinado.chartIndex!=null){
+    markers.push({ index: res.payback_date_combinado.chartIndex, label: 'Payback combinado: '+fmtMonthShort(res.payback_date_combinado.monthKey), color:'#6366F1' });
+  }
+
+  state.charts.g4 = new Chart(document.getElementById('chart-g4'), {
+    type:'line',
+    data:{
+      labels: months.concat(projLabels),
+      datasets:[
+        {label:'Poupança acumulada real (€)', data: real.concat(Array(25).fill(null)), borderColor:'#2A9D8F', borderWidth:2, pointRadius:0},
+        {label:'Projeção 25 anos (€)', data: Array(months.length-1).fill(null).concat([real[real.length-1]]).concat(res.projArray.map(v=>v+real[real.length-1])), borderColor:'#2A9D8F', borderDash:[6,4], borderWidth:2, pointRadius:0},
+        {label:'Investimento líquido (€)', data: Array(months.length+25).fill(params.invest_liquido), borderColor:'#EF4444', borderDash:[2,2], pointRadius:0, borderWidth:1}
+      ]
+    },
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:chartDefaults.color}}},
+      scales: baseScales({x:{ticks:{color:chartDefaults.color, maxRotation:60, minRotation:60, font:{size:9}}, grid:{color:'transparent'}}})},
+    plugins:[paybackMarkerPlugin(markers)]
+  });
+}
+
+function renderG5(res){
+  const card = document.getElementById('card-g5');
+  destroyChart('g5a'); destroyChart('g5b'); destroyChart('g5c');
+  const segments = res.segments;
+  // com 1 fase só não há nada para comparar — o gráfico inteiro deixa de fazer sentido
+  if(segments.length < 2){ card.style.display='none'; return; }
+  card.style.display='block';
+
+  const labels = segments.map((seg,i)=>'Fase '+(i+1));
+  const autossuf = segments.map(seg=> seg.consumo>0?(seg.autoconsumo/seg.consumo*100):0);
+  const impMedia = segments.map(seg=> seg.importacao/seg.months.length);
+  const consMedio = segments.map(seg=> seg.consumo/seg.months.length);
+  const cols = segments.map(seg=> COMP_META[seg.comp].color);
+
+  const mk = (elId,data,title)=> new Chart(document.getElementById(elId), {
+    type:'bar',
+    data:{labels, datasets:[{data, backgroundColor:cols}]},
+    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}, title:{display:true, text:title, color:chartDefaults.color, font:{size:11}}},
+      scales: baseScales()}
+  });
+  state.charts.g5a = mk('chart-g5a', autossuf, 'Autossuficiência (%)');
+  state.charts.g5b = mk('chart-g5b', impMedia, 'Importação média (kWh)');
+  state.charts.g5c = mk('chart-g5c', consMedio, 'Consumo médio (kWh)');
+}
+
+function renderG6(res){
+  const card = document.getElementById('card-g6');
+  const months = Object.keys(res.wbMonth).sort();
+  if(months.length===0){ card.style.display='none'; return; }
+  card.style.display='block';
+  destroyChart('g6');
+  const solar = months.map(m=>res.wbMonth[m].kwh_solar);
+  const rede = months.map(m=>res.wbMonth[m].kwh_rede);
+  state.charts.g6 = new Chart(document.getElementById('chart-g6'), {
+    type:'bar',
+    data:{labels:months, datasets:[
+      {label:'Solar/Armazenado (09-22h)', data:solar, backgroundColor:'#F4A261', stack:'ev'},
+      {label:'Rede/Vazio (22-08h)', data:rede, backgroundColor:'#6366F1', stack:'ev'}
+    ]},
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:chartDefaults.color}}}, scales:baseScales()}
+  });
+}
+
+function renderG7(res){
+  const card = document.getElementById('card-g7');
+  if(res.wbSessions===0){ card.style.display='none'; return; }
+  card.style.display='block';
+  destroyChart('g7');
+
+  state.charts.g7 = new Chart(document.getElementById('chart-g7'), {
+    type:'doughnut',
+    data:{labels:['Solar/Armazenado','Rede'], datasets:[{data:[res.wbSolarKwh, res.wbRedeKwh], backgroundColor:['#F4A261','#6366F1'], borderColor:'#1E293B'}]},
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:chartDefaults.color}},
+        tooltip:{callbacks:{label:(ctx)=> ctx.label+': '+fmt(ctx.raw,0)+' kWh'}}
+      }
+    },
+    plugins:[{
+      id:'centerText',
+      afterDraw(chart){
+        const {ctx, chartArea:{width,height,left,top}} = chart;
+        ctx.save();
+        ctx.font='700 16px sans-serif'; ctx.fillStyle='#F1F5F9'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(fmt(res.wbTotalKwh,0)+' kWh', left+width/2, top+height/2);
+        ctx.restore();
+      }
+    }]
+  });
+}
+
+/* G8 já não depende de haver EV. Com wallbox carregada, mostra a sazonalidade da origem
+   da energia de carregamento (como antes, restrito à fase mais recente com EV — antes
+   dessa fase o EV simplesmente não existia no sistema, não faz sentido incluir esses
+   meses). Sem wallbox, mostra a sazonalidade geral da casa (% autoconsumo vs % rede
+   sobre o consumo total), que existe em qualquer sistema solar, com ou sem EV — usa
+   todo o histórico carregado, já que aqui não há uma fase "antes de existir" a excluir.
+   Em ambos os casos, um mês sem dados nesse indicador específico (sem sessão wallbox
+   nesse mês, por exemplo) fica a null e a linha salta o mês (spanGaps) em vez de
+   aparecer partida a meio do gráfico. */
+function renderG8(res){
+  const card = document.getElementById('card-g8');
+  const g8TitleEl = document.getElementById('g8-title');
+  destroyChart('g8');
+
+  if(res.wbSessions>0){
+    const evSegments = res.segments.filter(seg=> seg.comp.includes('E'));
+    const lastEvSeg = evSegments[evSegments.length-1];
+    if(!lastEvSeg){ card.style.display='none'; return; }
+    card.style.display='block';
+    if(g8TitleEl) g8TitleEl.textContent = `G8 · Sazonalidade EV — % Solar vs % Rede (${segmentPeriodLabel(lastEvSeg)})`;
+
+    const evMonths = lastEvSeg.months;
+    const pctSolar = evMonths.map(m=>{ const v=res.wbMonth[m]; return (v && v.kwh_total>0) ? v.kwh_solar/v.kwh_total*100 : null; });
+    const pctRede = evMonths.map(m=>{ const v=res.wbMonth[m]; return (v && v.kwh_total>0) ? v.kwh_rede/v.kwh_total*100 : null; });
+    state.charts.g8 = new Chart(document.getElementById('chart-g8'), {
+      type:'line',
+      data:{labels:evMonths, datasets:[
+        {label:'% Solar/Armazenado (EV)', data:pctSolar, borderColor:'#F4A261', backgroundColor:'rgba(244,162,97,0.12)', fill:true, tension:.25, spanGaps:true},
+        {label:'% Rede/Vazio (EV)', data:pctRede, borderColor:'#6366F1', backgroundColor:'rgba(99,102,241,0.12)', fill:true, tension:.25, spanGaps:true}
+      ]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:chartDefaults.color}}}, scales:baseScales()}
+    });
+  }else{
+    if(res.months.length===0){ card.style.display='none'; return; }
+    card.style.display='block';
+    if(g8TitleEl) g8TitleEl.textContent = 'G8 · Sazonalidade — % Autoconsumo (PV) vs % Rede';
+
+    const months = res.months;
+    const pctAutoconsumo = months.map(m=>{ const r=state.monthly[m]; return r.consumo>0 ? (r.autoconsumo/r.consumo*100) : null; });
+    const pctImportacao = months.map(m=>{ const r=state.monthly[m]; return r.consumo>0 ? (r.importacao/r.consumo*100) : null; });
+    state.charts.g8 = new Chart(document.getElementById('chart-g8'), {
+      type:'line',
+      data:{labels:months, datasets:[
+        {label:'% Autoconsumo (PV)', data:pctAutoconsumo, borderColor:'#F4A261', backgroundColor:'rgba(244,162,97,0.12)', fill:true, tension:.25, spanGaps:true},
+        {label:'% Rede', data:pctImportacao, borderColor:'#6366F1', backgroundColor:'rgba(99,102,241,0.12)', fill:true, tension:.25, spanGaps:true}
+      ]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:chartDefaults.color}}}, scales:baseScales()}
+    });
+  }
+}
+
+function renderG9(res){
+  const card = document.getElementById('card-g9');
+  if(res.wbSessions===0){ card.style.display='none'; return; }
+  card.style.display='block';
+  destroyChart('g9');
+  state.charts.g9 = new Chart(document.getElementById('chart-g9'), {
+    type:'bar',
+    data:{
+      labels:['Mix aleatório (contrafactual)','Estratégia real','Pior caso (só rede fora-vazio)'],
+      datasets:[{
+        data:[res.cost_ev_mix, res.cost_ev_real, res.wbTotalKwh*params.tarifa_fora_vazio],
+        backgroundColor:['#94A3B8','#2A9D8F','#EF4444']
+      }]
+    },
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        subtitle:{display:true, text:`Poupança mix→real: ${fmtEUR(res.saving_ev,0)}`, color:chartDefaults.color}
+      },
+      scales: baseScales()}
+  });
+}
+
+/* ============================================================
+   PIPELINE PRINCIPAL DE RENDER
+============================================================ */
+function fullRender(){
+  const res = computeAll();
+  updateHeaderSummary();
+  if(!res){
+    document.getElementById('kpi-main-target').innerHTML = '<div class="empty-note">Carregue o CSV do FusionSolar para calcular os KPIs.</div>';
+    document.getElementById('kpi-eco-section').style.display='none';
+    document.getElementById('kpi-bat-section').style.display='none';
+    document.getElementById('phase-section').style.display='none';
+    document.getElementById('charts-section').style.display='none';
+    return;
+  }
+  renderMainKPIs(res);
+  renderEcoTable(res);
+  renderBatTable(res);
+  renderPhaseTable(res);
+
+  document.getElementById('charts-section').style.display='block';
+  renderG1(res, res.wbMonth);
+  renderG2(res);
+  renderG3(res);
+  renderG4(res);
+  renderG5(res);
+  renderG6(res);
+  renderG7(res);
+  renderG8(res);
+  renderG9(res);
+
+  // Gera já as imagens de impressão (não à espera do momento de imprimir) para eliminar
+  // a corrida entre a decodificação da imagem e a captura de layout do Chrome/Edge/Firefox.
+  setTimeout(preparePrintImages, 0);
+}
+
+/* ============================================================
+   EVENTOS DE UPLOAD
+============================================================ */
+function setupDropzone(dzId, inputId, onFiles){
+  const dz = document.getElementById(dzId);
+  const input = document.getElementById(inputId);
+  dz.addEventListener('click', ()=> input.click());
+  input.addEventListener('change', e=> onFiles(Array.from(e.target.files)));
+  ['dragover','dragenter'].forEach(ev=> dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(ev=> dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.remove('dragover'); }));
+  dz.addEventListener('drop', e=>{
+    e.preventDefault();
+    onFiles(Array.from(e.dataTransfer.files));
+  });
+}
+
+setupDropzone('dz-fusion','file-fusion', files=>{
+  const f = files[0]; if(!f) return;
+  parseAnnualFile(f).then(({monthly, count})=>{
+    const overwritten = Object.keys(monthly).filter(mk => state.monthly[mk] !== undefined);
+    const monthsSorted2 = Object.keys(monthly).sort();
+    const summary = count>0
+      ? `${count} mês(es) (${monthsSorted2[0]} a ${monthsSorted2[monthsSorted2.length-1]})`
+      : '0 meses';
+    addDocument({ type:'fusion-annual', filename:f.name, summary, payload:{monthly} });
+    rebuildStateFromDocuments();
+    renderDocList();
+    syncDropzoneStatuses();
+    let msg = `FusionSolar Relatório Anual carregado (${count} meses)`;
+    if(overwritten.length) msg += ` — substituídos: ${overwritten.join(', ')}`;
+    setStatus('status-fusion', msg);
+    fullRender();
+  }).catch(err=>{
+    setStatus('status-fusion', 'Erro: '+err.message, true);
+  });
+});
+
+setupDropzone('dz-daily','file-daily', files=>{
+  if(!files.length) return;
+  // Promise.all devolve os resultados na ordem de ENTRADA (seleção), não na ordem de
+  // CONCLUSÃO da leitura assíncrona — importante se dois ficheiros do mesmo lote
+  // cobrirem o mesmo mês, para que "o último carregado substitui" siga a ordem de
+  // seleção e não qual leitura terminou primeiro.
+  Promise.all(files.map(f=>
+    parsePartialMonthFile(f)
+      .then(r=>({ ok:true, r, filename:f.name }))
+      .catch(err=>({ ok:false, name:f.name, message:err.message }))
+  )).then(outcomes=>{
+    const results = outcomes.filter(o=>o.ok);
+    const errors = outcomes.filter(o=>!o.ok).map(o=>o.name+': '+o.message);
+    const overwritten = results.filter(o => state.monthly[o.r.monthKey] !== undefined).map(o=>o.r.monthKey);
+    results.forEach(o=>{
+      addDocument({ type:'fusion-daily', filename:o.filename, summary:`Mês ${o.r.monthKey}`, payload:{monthKey:o.r.monthKey, rec:o.r.rec} });
+    });
+    rebuildStateFromDocuments();
+    renderDocList();
+    syncDropzoneStatuses();
+    let msg = `${results.length} mês(es) atualizado(s) via Relatório Mensal`;
+    if(overwritten.length) msg += ` — substituídos: ${overwritten.join(', ')}`;
+    if(errors.length) msg += ` | erros: ${errors.join('; ')}`;
+    setStatus('status-daily', msg, errors.length>0 && results.length===0);
+    fullRender();
+  });
+});
+
+setupDropzone('dz-wallbox','file-wallbox', files=>{
+  const f = files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    try{
+      const data = new Uint8Array(ev.target.result);
+      const wb = XLSX.read(data, {type:'array', cellDates:true});
+      const rawSessions = parseWallboxXLSX(wb);
+      const {sessions, dupCount} = dedupeSessions(rawSessions);
+      const summary = `${sessions.length} sessões` + (dupCount>0 ? ` (${dupCount} duplicadas ignoradas)` : '');
+      addDocument({ type:'wallbox', filename:f.name, summary, payload:{sessions} });
+      rebuildStateFromDocuments();
+      renderDocList();
+      syncDropzoneStatuses();
+      setStatus('status-wallbox', `Wallbox carregada (${summary})`);
+      fullRender();
+    }catch(err){
+      setStatus('status-wallbox', 'Erro: '+err.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(f);
+});
+
+document.getElementById('btn-clear-data').addEventListener('click', ()=>{
+  if(!confirm('Limpar todos os dados carregados (FusionSolar e Wallbox)? Os parâmetros da instalação não são afetados.')) return;
+  state.loadedDocuments = [];
+  rebuildStateFromDocuments();
+  renderDocList();
+  setStatus('status-fusion', 'Nenhum ficheiro carregado');
+  setStatus('status-daily', 'Nenhum ficheiro carregado');
+  setStatus('status-wallbox', 'Nenhum ficheiro carregado');
+  fullRender();
+});
+
+document.getElementById('btn-recalc').addEventListener('click', ()=>{
+  readParamsFromUI();
+  fullRender();
+});
+document.getElementById('btn-print').addEventListener('click', async ()=>{
+  await preparePrintImages();
+  window.print();
+});
+document.getElementById('btn-save-params').addEventListener('click', ()=>{
+  readParamsFromUI();
+  exportParamsJSON();
+});
+document.getElementById('btn-load-params').addEventListener('click', ()=> document.getElementById('file-params').click());
+document.getElementById('file-params').addEventListener('change', e=>{
+  const f = e.target.files[0];
+  if(f) importParamsJSON(f);
+});
+
+/* Rodapé — versão + changelog em dropdown */
+function renderChangelog(){
+  const panel = document.getElementById('changelog-panel');
+  panel.innerHTML = CHANGELOG.map(c=>`
+    <div class="changelog-entry">
+      <span class="cl-version">${c.version}</span> <span class="cl-date">— ${c.date}</span><br>
+      <strong>${c.title}</strong>
+      <ul>${c.items.map(i=>`<li>${i}</li>`).join('')}</ul>
+    </div>
+  `).join('');
+}
+/* Modal de ajuda — abre/fecha por botão, ×, clique fora, ou tecla Esc */
+const helpOverlayEl = document.getElementById('help-modal-overlay');
+document.getElementById('btn-help').addEventListener('click', ()=>{
+  helpOverlayEl.classList.add('open');
+});
+document.getElementById('btn-help-close').addEventListener('click', ()=>{
+  helpOverlayEl.classList.remove('open');
+});
+helpOverlayEl.addEventListener('click', e=>{
+  if(e.target === helpOverlayEl) helpOverlayEl.classList.remove('open');
+});
+document.addEventListener('keydown', e=>{
+  if(e.key === 'Escape' && helpOverlayEl.classList.contains('open')) helpOverlayEl.classList.remove('open');
+});
+
+const versionToggleEl = document.getElementById('version-toggle');
+versionToggleEl.textContent = DASHBOARD_VERSION + ' ▾';
+versionToggleEl.addEventListener('click', ()=>{
+  const panel = document.getElementById('changelog-panel');
+  const isOpen = panel.style.display !== 'none';
+  if(isOpen){
+    panel.style.display = 'none';
+    versionToggleEl.textContent = DASHBOARD_VERSION + ' ▾';
+  }else{
+    if(!panel.innerHTML) renderChangelog();
+    panel.style.display = 'block';
+    versionToggleEl.textContent = DASHBOARD_VERSION + ' ▴';
+  }
+});
+
+updateHeaderSummary();
+if(hadSavedParams){
+  setParamsSavedStatus('Parâmetros recuperados de uma sessão anterior neste browser.');
+}
+
+</script>
+</body>
+</html>
